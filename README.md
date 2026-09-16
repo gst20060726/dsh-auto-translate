@@ -46,6 +46,8 @@
 | **Gitee 镜像（国内可推）** | 在 gitee 建仓库 → [[git remote add gitee https://gitee.com/<你>/dsh-auto-translate.git]] → [[git push -u gitee main]] | [[dsh plugin --profile web add 'git+https://gitee.com/<你>/dsh-auto-translate.git#<commit>']] |
 | **npm（不需要 GitHub）** | [[npm login]] → [[npm publish --access public]] | [[dsh plugin --profile web add dsh-auto-translate]] |
 
+> 三条路都有现成脚本:**[[powershell -File scripts/publish.ps1 -Target tgz|zip|bundle|gitee|github|npm]]**
+> （tgz/zip/bundle 全本地无需账号;gitee/github/npm 会交互式问你要凭据,脚本不保存）
 > 插件市场的**自动收录**需要 GitHub 仓库带 [[dsh-plugin]] 话题；打不开 GitHub 时用上面三种分发即可，功能完全一样。
 > 包内**不含** 74MB 的 ONNX Runtime wasm（首次使用时宿主端从 CDN 取回并缓存）；要完全离线，先 [[npm run fetch-vendor]] 再打包。
 

@@ -20,7 +20,11 @@ test('package.json 声明了 DSH 双面插件契约', () => {
   assert.equal(pkg.dsh.client.platform, 'web')
   assert.equal(pkg.exports['./client'], './client.js')
   assert.equal(pkg.exports['.'], './index.js')
-  assert.ok(pkg.files.includes('vendor'))
+  // 包内容契约：宿主/客户端/vendor 运行时必须随包；74MB 的 wasm 刻意不随包（首次使用时 CDN 兜底）
+  for (const need of ['index.js', 'client.js', 'cordis.patch.yml', 'vendor/worker.v4.js', 'vendor/transformers.esm.v2.js']) {
+    assert.ok(pkg.files.includes(need), 'files 应包含 ' + need)
+  }
+  assert.ok(!pkg.files.some((f) => f.endsWith('.wasm')), 'wasm 不应随包（CDN 兜底或 npm run fetch-vendor）')
 })
 
 test('cordis.patch.yml 是纯 insert（保证可热挂载）', () => {

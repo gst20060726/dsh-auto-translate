@@ -8,6 +8,14 @@ self.postMessage({ type: 'boot', origin: self.location.origin });
 const BASE = self.location.origin + '/dsh-auto-translate/vendor/';
 const BUNDLE = BASE + 'transformers.esm.v2.js';
 
+// 锁定模型 revision：上游改一次模型就可能行为变化或复现旧 bug，锁版本后才可复现、可回滚
+const REVISIONS = {
+  'Xenova/opus-mt-en-zh': '046f55aec303cdee3e0318604406d4df20f1e8ea',
+  'Xenova/opus-mt-zh-en': '39d480d52a9ea3065a1f117adfe4dbc55de10e6f',
+  'Xenova/nllb-200-distilled-600M': '261c31d1a5732c67cdd16d80e8d6088507c7ccea',
+};
+self.__test = { REVISIONS: REVISIONS };
+
 let libPromise = null;
 let lib = null;
 
@@ -88,7 +96,7 @@ async function loadPipe(key, model) {
   for (const step of LADDER) {
     try {
       self.postMessage({ type: 'ladder', key, model, step: step.label });
-      const opts = Object.assign({ progress_callback: progressReporter(key) }, step.opts);
+      const opts = Object.assign({ revision: REVISIONS[model] || 'main', progress_callback: progressReporter(key) }, step.opts);
       const pipe = await mod.pipeline('translation', model, opts);
       self.postMessage({ type: 'loaded', key, model, variant: step.label });
       return pipe;

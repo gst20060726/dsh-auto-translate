@@ -324,6 +324,44 @@ window.__ModuleLoader__.load({
 		var onDeviceFailures = 0, onDeviceDisabled = false;
 		// ===== 本机离线引擎（浏览器内 WASM，推理在 vendor/worker.js） =====
 		var localWorker = null, localPending = new Map(), localSeq = 1, localWarm = false, localProgress = null;
+		var localWarming = false, workerRecoveries = 0, storageInfo = '';
+		var QUEUE_MAX = 3000;      // 队列上限：超大页面时不再无节制入队
+		var RECORDS_MAX = 5000;    // 已译文记录上限：避免内存无限增长
+
+		/** 把出错的 worker 丢掉，下次调用会重建（fp32 建会话可能 OOM/崩溃，必须能自愈） */
+		function resetWorker(reason) {
+			try { if (localWorker) localWorker.terminate(); } catch (e) { }
+			localWorker = null;
+			localWarm = false;
+			localWarming = false;
+			localProgress = null;
+			if (reason) { workerRecoveries++; console.warn('[dsh-auto-translate] worker reset: ' + reason); }
+		}
+		/** 把技术性报错翻译成用户能懂的下一步 */
+		function hintFor(msg) {
+			var m = String(msg || '');
+			if (/Missing required scale|TransposeDQWeights|dq_actions/.test(m)) return '建议:改用 fp32 干净图(插件默认已是)或点「重试」';
+			if (/Failed to fetch|NetworkError|Load failed/.test(m)) return '建议:检查网络/代理,或点「重试」(宿主端会断点续传)';
+			if (/不支持该语向/.test(m)) return '建议:把「拉丁源语言」从 auto 改成具体语言(如 English)';
+			if (/quotaFinished|429|限流/.test(m)) return '建议:切换到「本机离线」引擎(不限量)';
+			if (/OOM|out of memory|Array buffer allocation/.test(m)) return '建议:关闭其他标签页后点「重试」(fp32 模型占用较大内存)';
+			if (/worker/.test(m)) return '建议:刷新页面(Ctrl+F5)让 worker 重建';
+			return '';
+		}
+		function requestPersist() {
+			try {
+				if (navigator.storage && navigator.storage.persist) {
+					navigator.storage.persist().then(function (granted) {
+						storageInfo = granted ? '已申请持久化存储' : '浏览器未授予持久化存储';
+					}, function () { });
+				}
+				if (navigator.storage && navigator.storage.estimate) {
+					navigator.storage.estimate().then(function (est) {
+						if (est && est.quota) storageInfo = '用量 ' + Math.round((est.usage || 0) / 1048576) + '/' + Math.round(est.quota / 1048576) + 'MB';
+					}, function () { });
+				}
+			} catch (e) { }
+		}
 
 		function ensureLocalWorker() {
 			if (localWorker) return localWorker;
@@ -350,8 +388,8 @@ window.__ModuleLoader__.load({
 				}
 				if (m.type === 'fatal') {
 					lastError = '本地库加载失败: ' + m.error + ' @ ' + (m.where || '');
-					localProgress = null;
 					failAllPending(lastError);
+					resetWorker('fatal');
 					updateStatus();
 					return;
 				}
@@ -369,23 +407,48 @@ window.__ModuleLoader__.load({
 			};
 			localWorker.onerror = function (e) {
 				lastError = '本地 worker 加载失败: ' + ((e && e.message) || 'unknown') + (e && e.filename ? ' @ ' + String(e.filename).split('/').pop() + ':' + e.lineno : '');
-				localProgress = null;
 				failAllPending(lastError);
+				resetWorker('onerror');
 				updateStatus();
 			};
 			return localWorker;
 		}
-		function localTranslate(text, src, tgt) {
+		function localTranslateOnce(text, src, tgt) {
 			return new Promise(function (resolve, reject) {
 				var w;
 				try { w = ensureLocalWorker(); } catch (e) { reject(e); return; }
 				var id = localSeq++;
 				localPending.set(id, { resolve: resolve, reject: reject });
-				setTimeout(function () {
-					if (localPending.has(id)) { localPending.delete(id); reject(new Error('本地翻译超时（模型可能正在下载）')); }
-				}, 180000);
+				var waited = 0;
+				var timer = setInterval(function () {
+					waited += 5000;
+					if (!localPending.has(id)) { clearInterval(timer); return; }
+					// 首次含模型下载，给足时间；但一旦 worker 崩了就不要傻等
+					if (waited > 300000) {
+						clearInterval(timer); localPending.delete(id);
+						resetWorker('timeout');
+						reject(new Error('本地翻译超时（模型可能正在下载或 worker 已崩溃）'));
+					}
+				}, 5000);
+				var origResolve = resolve, origReject = reject;
+				localPending.set(id, {
+					resolve: function (v) { clearInterval(timer); origResolve(v); },
+					reject: function (e) { clearInterval(timer); origReject(e); },
+				});
 				w.postMessage({ id: id, type: 'translate', text: text, src: src, tgt: tgt });
 			});
+		}
+		/** 失败一次就重建 worker 并重试一次（模型已在缓存里，重建代价很小） */
+		async function localTranslate(text, src, tgt) {
+			try { return await localTranslateOnce(text, src, tgt); }
+			catch (e) {
+				if (/超时|worker/.test(String(e && e.message))) {
+					resetWorker('auto-retry');
+					await new Promise(function (r) { setTimeout(r, 300); });
+					return await localTranslateOnce(text, src, tgt);
+				}
+				throw e;
+			}
 		}
 		var localBooted = false;
 		var rebinding = null;
@@ -425,18 +488,21 @@ window.__ModuleLoader__.load({
 			});
 		}
 		function warmLocal() {
+			if (localWarming) return;   // 幂等：重复点击不再叠加下载
+			localWarming = true;
+			requestPersist();
 			var tgt = String(settings.target).split('-')[0];
 			var src = settings.latinSource === 'auto' ? 'en' : settings.latinSource;
 			try {
 				var w = ensureLocalWorker();
 				var id = localSeq++;
 				localPending.set(id, {
-					resolve: function () { localWarm = true; updateStatus(); },
-					reject: function (e) { lastError = '本地模型下载失败: ' + ((e && e.message) || e); updateStatus(); }
+					resolve: function () { localWarming = false; localWarm = true; updateStatus(); },
+					reject: function (e) { localWarming = false; lastError = '本地模型下载失败: ' + ((e && e.message) || e); updateStatus(); }
 				});
-				if (statusEl) statusEl.textContent = '正在下载/初始化本地模型（首次约 110MB，之后离线）…';
+				if (statusEl) statusEl.textContent = '正在下载/初始化本地模型（首次约 425MB，之后离线）…';
 				w.postMessage({ id: id, type: 'warm', src: src, tgt: tgt });
-			} catch (e) { lastError = '本地 worker 启动失败: ' + ((e && e.message) || e); updateStatus(); }
+			} catch (e) { localWarming = false; lastError = '本地 worker 启动失败: ' + ((e && e.message) || e); updateStatus(); }
 		}
 		var lastError = '';
 
@@ -458,6 +524,7 @@ window.__ModuleLoader__.load({
 			if (trimmed.length < settings.minChars) { stats.skippedShort++; return; }
 			if (!WORDISH.test(trimmed)) { stats.skippedShort++; return; }
 			if (/^(https?:\/\/|www\.|[\w.-]+@[\w.-]+\.\w+)[^\s]*$/i.test(trimmed)) { stats.skippedShort++; return; }
+			if (queue.length >= QUEUE_MAX) { stats.skippedShort++; if (!lastError) lastError = '页面文本超出队列上限(' + QUEUE_MAX + ')，已暂停新入队，可点「重试」'; return; }
 			queued.add(node);
 			queue.push(node);
 			stats.queued++;
@@ -531,6 +598,7 @@ window.__ModuleLoader__.load({
 					if (isSkipped(el)) { processed.add(node); continue; }
 					if (!inViewport(node)) { observeVisible(el); continue; }
 					if (settings.maxChars && stats.chars >= settings.maxChars) { lastError = '达到本次会话翻译上限 ' + settings.maxChars + ' 字符'; break; }
+					if (records.length >= RECORDS_MAX) { lastError = '已译文条目达到上限 ' + RECORDS_MAX + '，可点「重试」或「还原原文」释放'; break; }
 					var text = node.nodeValue;
 					if (!text || text.trim().length < settings.minChars) { processed.add(node); continue; }
 					var src = null;
@@ -683,7 +751,12 @@ window.__ModuleLoader__.load({
 				+ ' | 扫描 ' + stats.scanned + ' / 入队 ' + stats.queued + ' / 已译 ' + stats.translated
 				+ ' / 跳过语言 ' + stats.skippedLang + ' / 失败 ' + stats.failed + (stats.fellBack ? ' / 回退 ' + stats.fellBack : '')
 				+ ' | 缓存 ' + cache.size + (settings.enabled ? '' : ' | 已暂停');
-			if (lastError) statusEl.textContent += ' | 最近: ' + String(lastError).slice(0, 80) + (String(lastError).length > 80 ? ' …(完整见下方框/点保存诊断)' : '');
+			if (lastError) {
+				statusEl.textContent += ' | 最近: ' + String(lastError).slice(0, 80) + (String(lastError).length > 80 ? ' …(完整见下方框/点保存诊断)' : '');
+				var hint = hintFor(lastError);
+				if (hint) statusEl.textContent += ' | ' + hint;
+			}
+			if (workerRecoveries && statusEl) statusEl.textContent += ' | worker 自愈 ' + workerRecoveries + ' 次';
 			var errBoxEl = cardEl && cardEl.querySelector('[data-el="errbox"]');
 			if (errBoxEl) {
 				if (lastError) { errBoxEl.value = String(lastError); errBoxEl.style.display = 'block'; }
@@ -966,7 +1039,9 @@ window.__ModuleLoader__.load({
 				onDeviceTranslator: !!T,
 				languageDetector: !!(typeof self.LanguageDetector === 'function' || (self.ai && self.ai.languageDetector)),
 				stats: stats, lastError: lastError, cacheSize: cache.size,
-				localWarm: localWarm, localBooted: localBooted, localProgress: localProgress, detectorDisabled: detectorDisabled,
+				localWarm: localWarm, localWarming: localWarming, localBooted: localBooted, localProgress: localProgress,
+				detectorDisabled: detectorDisabled, workerRecoveries: workerRecoveries, queue: queue.length, records: records.length,
+				storage: storageInfo, limits: { queue: QUEUE_MAX, records: RECORDS_MAX },
 				records: records.length, panelMounted: !!hostEl, enabled: settings.enabled
 			});
 		}
@@ -1073,6 +1148,12 @@ window.__ModuleLoader__.load({
 		}
 		exports.apply = apply;
 		exports.inject = [];
+		// 供离线单测使用（不影响运行时）
+		exports.__test = {
+			scriptTag: scriptTag, chunkText: chunkText, comboOf: comboOf, hintFor: hintFor,
+			mmLang: typeof mmLang === 'function' ? mmLang : null, inViewport: inViewport, planSource: planSource,
+			limits: { QUEUE_MAX: QUEUE_MAX, RECORDS_MAX: RECORDS_MAX },
+		};
 		return module.exports;
 	}
 });

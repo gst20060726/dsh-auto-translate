@@ -9,7 +9,7 @@
  * 不产生 token 消耗；模型文件由浏览器直接从 hf-mirror.com 拉取并缓存，
  * 服务器不代理、不落盘。
  */
-import { createReadStream, createWriteStream, existsSync, mkdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { once } from 'node:events'
 import { homedir } from 'node:os'
 import { dirname, extname, join, normalize, sep } from 'node:path'
@@ -50,6 +50,14 @@ async function saveDiag(req, res) {
 		const stamp = new Date().toISOString().replace(/[:.]/g, '-')
 		const file = join(DIAG_DIR, 'diagnose-' + stamp + '.json')
 		writeFileSync(file, body)
+		// 只保留最近 20 份，避免长期使用把磁盘塞满
+		try {
+			const keep = readdirSync(DIAG_DIR)
+				.filter((n) => n.startsWith('diagnose-') && n.endsWith('.json'))
+				.sort()
+				.reverse()
+			for (const old of keep.slice(20)) rmSync(join(DIAG_DIR, old), { force: true })
+		} catch { /* best effort */ }
 		console.log('[dsh-auto-translate] diagnose saved: ' + file)
 		res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
 		res.end(JSON.stringify({ ok: true, file }))
@@ -216,6 +224,16 @@ async function serveVendor(req, res) {
 
 export function apply(ctx) {
 	let registered = false
+	const safeRegister = (route) => {
+		try {
+			ctx.webServer.register(route)
+			return true
+		} catch (err) {
+			// 重复注册（例如同一 profile 里装了两份）不应让整个插件挂掉
+			console.log('[dsh-auto-translate] register skipped: ' + String((err && err.message) || err))
+			return false
+		}
+	}
 	const tryRegister = () => {
 		// Cordis: 未注入(inject)且服务尚未注册时, 访问 ctx.webServer / ctx.get('webServer')
 		// 会抛 "cannot get property ... without inject" 而非返回 undefined, 这里捕获即可。
@@ -227,7 +245,7 @@ export function apply(ctx) {
 		}
 		if (!webServer || registered) return false
 		registered = true
-		webServer.register({
+		safeRegister({
 			kind: 'prefix',
 			path: ROUTE_PREFIX,
 			handler: (req, res) => {
@@ -239,7 +257,7 @@ export function apply(ctx) {
 				void serveVendor(req, res)
 			},
 		})
-		webServer.register({
+		safeRegister({
 			kind: 'prefix',
 			path: MODEL_PREFIX,
 			handler: (req, res) => {
@@ -251,13 +269,19 @@ export function apply(ctx) {
 				proxyModel(req, res)
 			},
 		})
-		webServer.register({
+		safeRegister({
 			kind: 'exact',
 			path: DIAG_PATH,
 			handler: (req, res) => {
 				if (req.method !== 'POST') {
 					res.writeHead(405, { 'Content-Type': 'text/plain' })
 					res.end('method not allowed')
+					return
+				}
+				const hostName = String(req.headers.host || '').split(':')[0]
+				if (!/^(127\.0\.0\.1|localhost|\[::1\]|::1)$/.test(hostName)) {
+					res.writeHead(403, { 'Content-Type': 'text/plain' })
+					res.end('loopback only')
 					return
 				}
 				saveDiag(req, res)

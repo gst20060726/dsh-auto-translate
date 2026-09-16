@@ -1284,6 +1284,7 @@ window.__ModuleLoader__.load({
 				}, { rootMargin: '300px 0px' });
 			} catch (e) { }
 			setTimeout(function () { scanRoot(document.body, 0); }, 900);
+			refreshHostCacheInfo();
 			// 启动自动预热：模型已在浏览器缓存里，只需重建会话（几百毫秒~数秒）
 			if (settings.enabled && settings.engine !== 'off' && (settings.localWarmOnce || settings.engine === 'local')) {
 				setTimeout(function () { try { warmLocal(); } catch (e) { } }, 1500);
@@ -1300,7 +1301,6 @@ window.__ModuleLoader__.load({
 		function apply(ctx) {
 			try {
 				if (document.body) start();
-			refreshHostCacheInfo();
 				else document.addEventListener('DOMContentLoaded', start, { once: true });
 			} catch (e) { console.warn('[dsh-auto-translate]', e); }
 		}

@@ -79,7 +79,7 @@ test('E2E: 翻译 → 悬停切回原文 → 观察者不覆盖 → 再悬停切
   const { window } = dom
   try {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      engine: 'local', target: 'zh', latinSource: 'en', hoverDelayMs: 0, minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
+      version: 4, engine: 'local', target: 'zh', latinSource: 'en', hoverDelayMs: 0, minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
     }))
     // jsdom 没有布局：给所有元素一个"可见"矩形，否则视口门控会全部跳过
     window.Element.prototype.getBoundingClientRect = function () {
@@ -122,7 +122,7 @@ test('E2E: 流式追加的文本只在稳定后才翻译（不与追加剧烈打
   const { window } = dom
   try {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      engine: 'local', target: 'zh', latinSource: 'en', minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
+      version: 4, engine: 'local', target: 'zh', latinSource: 'en', minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
     }))
     window.Element.prototype.getBoundingClientRect = function () {
       return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
@@ -142,6 +142,42 @@ test('E2E: 流式追加的文本只在稳定后才翻译（不与追加剧烈打
     assert.equal(node.nodeValue, settled, '追加期间不应改写文本')
     // 停止追加后，应在稳定期内被翻译
     assert.ok(await waitFor(() => /ZH</.test(node.nodeValue), 3000), '停止追加后应翻译，实际: ' + JSON.stringify(node.nodeValue))
+  } finally {
+    window.close()
+  }
+})
+
+test('E2E 悬停模式: 加载后不自动翻译任何内容，悬停后才翻译该块', { skip }, async () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><body><div id="a"><p id="p1">Hello world, this needs translation.</p></div></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true },
+  )
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      version: 4, engine: 'hover', target: 'zh', latinSource: 'en', hoverDelayMs: 120, minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
+    }))
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const p1 = window.document.getElementById('p1')
+    const node = p1.firstChild
+    const original = node.nodeValue
+    loadClientInto(window).apply({})
+
+    // 1) 悬停模式：初始绝不自动翻译
+    await sleep(700)
+    assert.equal(node.nodeValue, original, '悬停模式下加载后不得自动翻译，实际: ' + JSON.stringify(node.nodeValue))
+
+    // 2) 悬停超过阈值 → 只翻译这一块
+    p1.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+    assert.ok(await waitFor(() => /ZH</.test(node.nodeValue), 3000), '悬停后应翻译该块，实际: ' + JSON.stringify(node.nodeValue))
+
+    // 3) 译文必须保持：移开鼠标后再等一段，不得自动变回原文
+    p1.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true, relatedTarget: window.document.body }))
+    const translated = node.nodeValue
+    await sleep(900)
+    assert.equal(node.nodeValue, translated, '移开鼠标后译文必须保持，实际: ' + JSON.stringify(node.nodeValue))
   } finally {
     window.close()
   }

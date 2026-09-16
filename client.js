@@ -24,7 +24,8 @@ window.__ModuleLoader__.load({
 			enabled: true,
 			target: 'zh',
 			hoverDelayMs: 600,
-			engine: 'auto',          // auto | ondevice | online | custom | off
+			engine: 'hover',         // hover(按需悬停翻译) | auto | ondevice | online | custom | local | off
+			hoverEngine: 'local',    // 悬停模式实际用哪个引擎：local | online | custom
 			onlineOrder: 'mymemory', // mymemory(此网络可达) | google(部分网络不可达)
 			endpoint: '',            // 自定义端点模板：https://host/translate?q={text}&target={target}&source={source}
 			maxChunk: 1000,
@@ -72,6 +73,12 @@ window.__ModuleLoader__.load({
 		if (!settings.version || settings.version < 3) {
 			settings.version = 3;
 			settings.chipHidden = false;   // 曾被隐藏的小圆点重新出现，避免"找不到入口"
+			saveSettings();
+		}
+		// v4 迁移：默认行为从「自动全页翻译」改为「悬停才翻译」
+		if (!settings.version || settings.version < 4) {
+			settings.version = 4;
+			settings.engine = 'hover';
 			saveSettings();
 		}
 
@@ -304,6 +311,14 @@ window.__ModuleLoader__.load({
 			if (!sessionLimitActive()) return 0;
 			return Math.max(0, Number(settings.maxChars) || 0);
 		}
+		// 悬停模式下的「实际引擎」：由面板上的「切到本机」/「切到在线引擎」决定，默认本机离线
+		// （刷新后若模型已在缓存里，本机离线是零成本且不出网的选择）
+		function actualModeFor(node) {
+			if (settings.engine !== 'hover') return settings.engine;
+			var m = settings.hoverEngine;
+			if (m !== 'local' && m !== 'online' && m !== 'custom') m = 'local';
+			return m;
+		}
 		async function translateText(text, src, tgt) {
 			var mode = settings.engine;
 			if (mode === 'local') return translateLong(localTranslate, text, src, tgt, 600);
@@ -333,7 +348,9 @@ window.__ModuleLoader__.load({
 			if (mode === 'custom' || mode === 'http') return translateLong(httpTranslate, text, src, tgt);
 			if (mode === 'online') return withTimeout(translateLong(onlineTranslate, text, src, tgt, 480), 12000, '在线翻译');
 			if (mode === 'ondevice') return withTimeout(onDeviceTranslate(text, src, tgt), 8000, '端侧翻译');
-			return text;
+			if (mode === 'off') return text;
+			// 悬停模式：engine 本身只是「触发方式」，真正用哪个引擎看宿主上的标记；默认本机离线
+			return translateLong(localTranslate, text, src, tgt, 600);
 		}
 
 		// 决定这句是否需要翻译，以及源语言是什么
@@ -707,6 +724,7 @@ window.__ModuleLoader__.load({
 		var shadowSeen = new WeakSet();
 		function scanRoot(root, depth) {
 			if (!root || !settings.enabled) return;
+			if (settings.engine === 'hover') return;   // 悬停模式：不自动扫描、不自动翻译任何内容
 			depth = depth || 0;
 			if (depth > 6) return;
 			if (root.nodeType === 3) { enqueue(root); return; }
@@ -747,6 +765,9 @@ window.__ModuleLoader__.load({
 		}
 		async function pump() {
 			if (working || !settings.enabled) return;
+			if (settings.engine === 'hover') {   // 悬停模式：丢弃自动扫描残留的队列，绝不自动翻译
+				queue.length = 0; scheduled = false; updateStatus(); return;
+			}
 			working = true;
 			var budget = Math.max(1, settings.maxNodes);
 			try {
@@ -800,8 +821,119 @@ window.__ModuleLoader__.load({
 
 		// ===================== 悬停切换原文/译文 =====================
 		var hoverHost = null, hoverTimer = null, toggledHost = null;
+
+		// ---------- 悬停翻译模式（engine === 'hover'）----------
+		// 不自动扫描全页；只有鼠标停在同一块文字上达到 hoverDelayMs 才翻译那一块，且译文保持。
+		var hoverDone = new WeakSet();      // 已在本模式下翻译过的宿主元素
+		var hoverBusy = false;
+		// 收集元素自身直接持有的文本节点（不下钻到子元素，避免悬停一个容器把整页都翻了）
+		function collectOwnTextNodes(el) {
+			var out = [], kids = el.childNodes || [];
+			for (var i = 0; i < kids.length && out.length < settings.maxNodes; i++) {
+				var n = kids[i];
+				if (n.nodeType === 3 && n.nodeValue && n.nodeValue.trim().length >= settings.minChars) out.push(n);
+			}
+			return out;
+		}
+		// 针对悬停模式更精准的文本节点收集：优先「最内层、自身直接含文本」的元素
+		function collectHoverText(host) {
+			var nodes = collectOwnTextNodes(host);
+			if (nodes.length) return nodes;
+			var found = [];
+			try {
+				var all = host.querySelectorAll('*');
+				for (var i = 0; i < all.length && found.length < settings.maxNodes && i < 120; i++) {
+					var el = all[i];
+					if (!el.childNodes || el.childElementCount) continue;   // 只取叶子元素
+					var c = collectOwnTextNodes(el);
+					for (var k = 0; k < c.length && found.length < settings.maxNodes; k++) found.push(c[k]);
+				}
+			} catch (e) { }
+			return found;
+		}
+		async function translateNodeNow(node) {
+			if (processed.has(node)) return false;
+			var text = node.nodeValue;
+			if (!text || text.trim().length < settings.minChars) { processed.add(node); return false; }
+			var el = node.parentElement;
+			if (el && isSkipped(el)) { processed.add(node); return false; }
+			var src = null;
+			try { src = await planSource(text); } catch (e) { src = null; }
+			if (!src) { stats.skippedLang++; processed.add(node); return false; }
+			var realMode = actualModeFor(node);
+			var tgt = settings.target;
+			var key = cacheKey(text, src, tgt);
+			var out = cacheGet(key);
+			if (out === undefined) {
+				try {
+					if (realMode === 'local') out = await translateLong(localTranslate, text, src, tgt, 600);
+					else if (realMode === 'online') out = await withTimeout(translateLong(onlineTranslate, text, src, tgt, 480), 12000, '在线翻译');
+					else if (realMode === 'custom') out = await translateLong(httpTranslate, text, src, tgt);
+					else out = await translateText(text, src, tgt);
+				}
+				catch (e) { out = null; stats.failed++; lastError = String(e && e.message ? e.message : e); }
+				if (out) cacheSet(key, out);
+			}
+			if (!out || out === text) { processed.add(node); return false; }
+			var lead = text.match(/^\s*/)[0];
+			var tail = text.match(/\s*$/)[0];
+			var rec = { node: node, original: text, translated: lead + out + tail, showingOriginal: false };
+			records.push(rec);
+			recordByNode.set(node, rec);
+			processed.add(node);
+			node.nodeValue = lead + out + tail;
+			selfWrites.set(node, Date.now());
+			translatedCount++;
+			stats.translated++;
+			stats.chars += text.length;
+			return true;
+		}
+		async function translateHost(host) {
+			if (hoverBusy) return;
+			hoverBusy = true;
+			suppressMutationsUntil = Date.now() + 1500;
+			try {
+				var nodes = collectHoverText(host);
+				var changed = 0;
+				for (var i = 0; i < nodes.length; i++) {
+					var node = nodes[i];
+					if (records.length >= RECORDS_MAX) { lastError = '已译文条目达到上限 ' + RECORDS_MAX + '，可点「还原原文」释放'; break; }
+					if (await translateNodeNow(node)) changed++;
+				}
+				if (changed) {
+					host.setAttribute('data-dsh-at', 'translated');
+					hoverDone.add(host);
+				} else {
+					stats.skippedShort++;
+				}
+				updateStatus();
+			} finally { hoverBusy = false; }
+		}
+		// 找鼠标下面真正该翻译的那一块（向上找到最小且自身直接含文本的祖先）
+		function hoverTargetOf(el) {
+			var cur = el;
+			while (cur && cur !== document.body && cur.nodeType === 1) {
+				if (cur.hasAttribute && cur.hasAttribute('data-dsh-at')) return null;   // 这块已翻过，保持译文
+				if (collectOwnTextNodes(cur).length) return isSkipped(cur) ? null : cur;  // 面板/代码块/输入框不翻
+				cur = cur.parentElement;
+			}
+			return null;
+		}
+		function onOverHoverMode(e) {
+			if (!settings.enabled || hoverBusy) return;
+			var el = e.target && e.target.nodeType === 1 ? e.target : null;
+			if (!el || !el.closest) return;
+			var host = hoverTargetOf(el);
+			if (!host || host === hoverHost) return;
+			if (hoverTimer) clearTimeout(hoverTimer);
+			hoverHost = host;
+			var delay = e.altKey ? 60 : Math.max(0, settings.hoverDelayMs);
+			hoverTimer = setTimeout(function () { if (hoverHost === host) translateHost(host); }, delay);
+		}
+
 		function onOver(e) {
 			if (!settings.enabled) return;
+			if (settings.engine === 'hover') return onOverHoverMode(e);
 			var el = e.target && e.target.nodeType === 1 ? e.target : null;
 			if (!el || !el.closest) return;
 			var host = el.closest('[data-dsh-at]');
@@ -906,9 +1038,9 @@ window.__ModuleLoader__.load({
 				sessionLimit: '会话字符上限(仅在线)', resetChars: '清零计数',
 				restore: '还原原文', saveDiag: '保存诊断到本机', copyDiag: '复制诊断', retry: '重试',
 				toggleAll: '全部原文/译文', helpBtn: '使用指南', lang: '语言', langAuto: '自动',
-				engineAuto: '自动(本机→端侧→在线)', engineLocal: '本机离线(小模型)', engineOnDevice: '端侧仅',
+				engineHover: '悬停翻译(不自动翻)', engineAuto: '自动(本机→端侧→在线)', engineLocal: '本机离线(小模型)', engineOnDevice: '端侧仅',
 				engineOnline: '在线免密钥', engineCustom: '自定义端点', engineOff: '关闭',
-				footerHint: '悬停译文 0.6 秒切回原文；Alt+悬停立即切换。快捷键（可改键）：Ctrl+Alt+T 呼出面板 · Ctrl+Alt+H 显示/隐藏圆点 · Ctrl+Alt+P 暂停/恢复。全程不调用大模型。',
+				footerHint: '悬停 0.6 秒翻译鼠标下那一块（默认模式）；Alt+悬停可立即触发。快捷键（可改键）：Ctrl+Alt+T 呼出面板 · Ctrl+Alt+H 显示/隐藏圆点 · Ctrl+Alt+P 暂停/恢复。全程不调用大模型。',
 				stEngine: '引擎', stOnDevOk: ' · 端侧可用', stOnDevNo: ' · 端侧不可用',
 				stCounters: ' | 扫描 {s} / 入队 {q} / 已译 {t} / 跳过语言 {sl} / 失败 {f}',
 				stFallback: ' / 回退 {fb}', stCache: ' | 缓存 {c}', stPaused: ' | 已暂停',
@@ -942,9 +1074,9 @@ window.__ModuleLoader__.load({
 				sessionLimit: 'Session char cap (online only)', resetChars: 'Reset counter',
 				restore: 'Restore original', saveDiag: 'Save diagnostics', copyDiag: 'Copy diagnostics', retry: 'Retry',
 				toggleAll: 'All original/translated', helpBtn: 'Guide', lang: 'Language', langAuto: 'Auto',
-				engineAuto: 'Auto (local → built-in → online)', engineLocal: 'On-device (small model)', engineOnDevice: 'Built-in only',
+				engineHover: 'Hover to translate (no auto)', engineAuto: 'Auto (local → built-in → online)', engineLocal: 'On-device (small model)', engineOnDevice: 'Built-in only',
 				engineOnline: 'Online keyless', engineCustom: 'Custom endpoint', engineOff: 'Off',
-				footerHint: 'Hover a translation ~0.6s to flip back to the original; Alt+hover flips instantly. Hotkeys (rebindable): Ctrl+Alt+T panel · Ctrl+Alt+H chip · Ctrl+Alt+P pause. No LLM is ever called.',
+				footerHint: 'Hover a block for ~0.6s to translate just that block (default mode); Alt+hover triggers instantly. Hotkeys (rebindable): Ctrl+Alt+T panel · Ctrl+Alt+H chip · Ctrl+Alt+P pause. No LLM is ever called.',
 				stEngine: 'Engine', stOnDevOk: ' · built-in available', stOnDevNo: ' · built-in unavailable',
 				stCounters: ' | scanned {s} / queued {q} / translated {t} / skipped {sl} / failed {f}',
 				stFallback: ' / fallback {fb}', stCache: ' | cache {c}', stPaused: ' | paused',
@@ -1007,7 +1139,7 @@ window.__ModuleLoader__.load({
 		function updateStatus() {
 			if (!statusEl) return;
 			var T = translatorCtor();
-			var modeName = { auto: t('modeAuto'), ondevice: t('modeOnDevice'), online: t('modeOnline'), custom: t('modeCustom'), http: t('modeCustom'), off: t('modeOff') }[settings.engine] || settings.engine;
+			var modeName = { hover: t('engineHover'), auto: t('modeAuto'), ondevice: t('modeOnDevice'), online: t('modeOnline'), custom: t('modeCustom'), http: t('modeCustom'), off: t('modeOff') }[settings.engine] || settings.engine;
 			statusEl.textContent = t('stEngine') + ' ' + modeName + (settings.engine === 'auto' || settings.engine === 'ondevice' ? (T ? t('stOnDevOk') : t('stOnDevNo')) : '')
 				+ t('stCounters').replace('{s}', stats.scanned).replace('{q}', stats.queued).replace('{t}', stats.translated).replace('{sl}', stats.skippedLang).replace('{f}', stats.failed)
 				+ (stats.fellBack ? t('stFallback').replace('{fb}', stats.fellBack) : '')
@@ -1112,7 +1244,7 @@ window.__ModuleLoader__.load({
 				+ '<div class="row"><label data-i18n="enabled"></label><input type="checkbox" data-set="enabled"></div>'
 				+ '<div class="row"><label data-i18n="target"></label><select data-set="target"></select></div>'
 				+ '<div class="row"><label data-i18n="hoverDelay"></label><input type="number" min="0" max="5000" step="100" data-set="hoverDelayMs" style="width:80px"></div>'
-				+ '<div class="row"><label data-i18n="engine"></label><select data-set="engine"><option value="auto" data-i18n="engineAuto"></option><option value="local" data-i18n="engineLocal"></option><option value="ondevice" data-i18n="engineOnDevice"></option><option value="online" data-i18n="engineOnline"></option><option value="custom" data-i18n="engineCustom"></option><option value="off" data-i18n="engineOff"></option></select></div>'
+				+ '<div class="row"><label data-i18n="engine"></label><select data-set="engine"><option value="hover" data-i18n="engineHover"></option><option value="auto" data-i18n="engineAuto"></option><option value="local" data-i18n="engineLocal"></option><option value="ondevice" data-i18n="engineOnDevice"></option><option value="online" data-i18n="engineOnline"></option><option value="custom" data-i18n="engineCustom"></option><option value="off" data-i18n="engineOff"></option></select></div>'
 				+ '<div class="row"><label data-i18n="onlineOrder"></label><select data-set="onlineOrder"><option value="google">Google</option><option value="mymemory">MyMemory</option></select></div>'
 				+ '<div class="row"><label data-i18n="customTemplate"></label><input type="text" data-set="endpoint" placeholder="…?q={text}&target={target}" style="max-width:150px"></div>'
 				+ '<div class="row"><label data-i18n="latinSource"></label><select data-set="latinSource"></select></div>'
@@ -1245,21 +1377,37 @@ window.__ModuleLoader__.load({
 				else if (act === 'rebindHide') { rebinding = 'hotkeyHide'; if (statusEl) statusEl.textContent = '请按下新的「显示/隐藏圆点」组合键…（Esc 取消）'; }
 				else if (act === 'rebindPause') { rebinding = 'hotkeyPause'; if (statusEl) statusEl.textContent = '请按下新的「暂停/恢复」组合键…（Esc 取消）'; }
 				else if (act === 'uselocal') {
-					settings.engine = 'local';
-					saveSettings();
-					applySettingsToUI();
-					records = []; recordByNode = new WeakMap(); processed = new WeakSet(); translatedCount = 0;
-					scanRoot(document.body, 0);
-					warmLocal();
-					updateStatus();
+					if (settings.engine === 'hover') {
+						// 悬停模式下这两个按钮是「选哪个引擎来翻」的开关，不改变触发方式
+						settings.hoverEngine = 'local';
+						saveSettings();
+						applySettingsToUI();
+						warmLocal();
+						if (statusEl) statusEl.textContent = '悬停模式：改用【本机离线】翻译（悬停 ' + Math.round(settings.hoverDelayMs / 100) / 10 + ' 秒触发）';
+					} else {
+						settings.engine = 'local';
+						saveSettings();
+						applySettingsToUI();
+						records = []; recordByNode = new WeakMap(); processed = new WeakSet(); translatedCount = 0;
+						scanRoot(document.body, 0);
+						warmLocal();
+						updateStatus();
+					}
 				}
 				else if (act === 'useonline') {
-					settings.engine = 'online';
-					saveSettings();
-					applySettingsToUI();
-					records = []; recordByNode = new WeakMap(); processed = new WeakSet(); translatedCount = 0;
-					scanRoot(document.body, 0);
-					updateStatus();
+					if (settings.engine === 'hover') {
+						settings.hoverEngine = 'online';
+						saveSettings();
+						applySettingsToUI();
+						if (statusEl) statusEl.textContent = '悬停模式：改用【在线免密钥】翻译（有每日额度限制）';
+					} else {
+						settings.engine = 'online';
+						saveSettings();
+						applySettingsToUI();
+						records = []; recordByNode = new WeakMap(); processed = new WeakSet(); translatedCount = 0;
+						scanRoot(document.body, 0);
+						updateStatus();
+					}
 				}
 				else if (act === 'hide') { settings.chipHidden = true; saveSettings(); applySettingsToUI(); }
 				else if (act === 'resetpos') { settings.chipPos = null; saveSettings(); applySettingsToUI(); }
@@ -1478,6 +1626,7 @@ window.__ModuleLoader__.load({
 			scriptTag: scriptTag, chunkText: chunkText, comboOf: comboOf, hintFor: hintFor,
 			mmLang: typeof mmLang === 'function' ? mmLang : null, inViewport: inViewport, planSource: planSource,
 			sessionLimitActive: sessionLimitActive, sessionLimit: sessionLimit, settings: settings,
+			actualModeFor: actualModeFor,
 			limits: { QUEUE_MAX: QUEUE_MAX, RECORDS_MAX: RECORDS_MAX },
 		};
 		return module.exports;

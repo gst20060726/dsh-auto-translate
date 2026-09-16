@@ -97,6 +97,38 @@ test('会话字符上限只作用于在线/自定义引擎（本机离线零成�
   s.maxChars = 40000
 })
 
+test('悬停模式的实际引擎解析：默认本机离线，可切在线/自定义', () => {
+  const { mod } = loadClient()
+  const t = mod.__test
+  const s = mod.__test.settings
+  s.engine = 'hover'
+  s.hoverEngine = 'local'
+  assert.equal(t.actualModeFor(null), 'local', '悬停模式默认用本机离线')
+  s.hoverEngine = 'online'
+  assert.equal(t.actualModeFor(null), 'online')
+  s.hoverEngine = 'custom'
+  assert.equal(t.actualModeFor(null), 'custom')
+  s.hoverEngine = '乱写的值'
+  assert.equal(t.actualModeFor(null), 'local', '非法值应回退本机离线')
+  s.engine = 'auto'
+  s.hoverEngine = 'online'
+  assert.equal(t.actualModeFor(null), 'auto', '非悬停模式下必须原样返回用户选的引擎')
+  s.engine = 'hover'; s.hoverEngine = 'local'
+})
+
+test('悬停模式绝不自动扫描，且丢弃自动扫描残留队列', () => {
+  const src = read('client.js')
+  // 悬停模式：scanRoot 必须直接返回，pump 必须丢弃队列，两者都不得自动翻译
+  assert.match(src, /function scanRoot\(root, depth\) \{\s*\n\s*if \(!root \|\| !settings\.enabled\) return;\s*\n\s*if \(settings\.engine === 'hover'\) return;/,
+    'scanRoot 必须在悬停模式下直接返回')
+  assert.match(src, /async function pump\(\) \{[\s\S]{0,400}?engine === 'hover'\)[\s\S]{0,160}?queue\.length = 0/,
+    'pump 必须在悬停模式下丢弃队列')
+  // 悬停模式必须单独解析实际引擎，不能落到 translateText 尾部的空档
+  assert.match(src, /function actualModeFor\(/, '必须有 actualModeFor 解析悬停模式的实际引擎')
+  // 默认模式必须是悬停翻译，且设置为新用户/旧用户都迁移到它
+  assert.match(read('client.js'), /engine: 'hover',/, '默认引擎必须是 hover')
+})
+
 test('达到上限后「重试」与「清零计数」必须重置本次会话字符数', () => {
   const src = read('client.js')
   // retry / rescan / resetChars 三条路径都必须清零 stats.chars，否则会立刻再次撞线

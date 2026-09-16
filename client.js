@@ -354,6 +354,30 @@ window.__ModuleLoader__.load({
 			if (m !== 'local' && m !== 'online' && m !== 'custom') m = 'local';
 			return m;
 		}
+		// 悬停路径的本机翻译必须有界：localTranslateOnce 的看门狗要等 300 秒才 reject，
+		// 期间 hoverBusy 会一直为 true，导致之后所有悬停静默失效（只能刷页面）。首次可能要下模型，给足 60 秒。
+		var HOVER_LOCAL_TIMEOUT_MS = 60000;
+		function localTranslateGuarded(text, src, tgt, timeoutMs) {
+			return new Promise(function (resolve, reject) {
+				var done = false;
+				var timer = setTimeout(function () {
+					if (done) return;
+					done = true;
+					// 不 await 结果：让底层的看门狗继续负责 worker 自愈，先把 UI 解锁
+					try { localTranslate(text, src, tgt).then(function () { }, function () { }); } catch (e) { }
+					reject(new Error('本机翻译超时（' + Math.round(timeoutMs / 1000) + ' 秒，模型可能仍在下载或 worker 无响应）'));
+				}, timeoutMs);
+				localTranslate(text, src, tgt).then(function (v) {
+					if (done) return;
+					done = true; clearTimeout(timer); resolve(v);
+				}, function (e) {
+					if (done) return;
+					done = true; clearTimeout(timer);
+					if (/超时|worker/.test(String(e && e.message))) resetWorker('hover-timeout');
+					reject(e);
+				});
+			});
+		}
 		async function translateText(text, src, tgt) {
 			var mode = settings.engine;
 			if (mode === 'local') return translateLong(localTranslate, text, src, tgt, 600);
@@ -897,14 +921,21 @@ window.__ModuleLoader__.load({
 			if (!src) { stats.skippedLang++; processed.add(node); return false; }
 			var realMode = actualModeFor(node);
 			var tgt = settings.target;
+			// 会话字符上限：悬停路径也必须遵守（原来只在自动扫描的 pump 里判，悬停走在线会绕过配额保护）
+			var lim = sessionLimit();
+			if (lim && stats.chars >= lim) {
+				lastError = '达到本次会话翻译上限 ' + lim + ' 字符（仅在线/自定义引擎计数；点「清零计数」可继续）';
+				updateStatus();
+				return false;
+			}
 			var key = cacheKey(text, src, tgt);
 			var out = cacheGet(key);
 			if (out === undefined) {
 				try {
-					if (realMode === 'local') out = await translateLong(localTranslate, text, src, tgt, 600);
-					else if (realMode === 'online') out = await withTimeout(translateLong(onlineTranslate, text, src, tgt, 480), 12000, '在线翻译');
-					else if (realMode === 'custom') out = await translateLong(httpTranslate, text, src, tgt);
-					else out = await translateText(text, src, tgt);
+					if (realMode === 'local') out = await localTranslateGuarded(text, src, tgt, HOVER_LOCAL_TIMEOUT_MS);
+					else if (realMode === 'online') out = await withTimeout(translateLong(onlineTranslate, text, src, tgt, 480), 15000, '在线翻译');
+					else if (realMode === 'custom') out = await withTimeout(translateLong(httpTranslate, text, src, tgt), 15000, '自定义端点');
+					else out = await withTimeout(translateText(text, src, tgt), 20000, '翻译');
 				}
 				catch (e) { out = null; stats.failed++; lastError = String(e && e.message ? e.message : e); }
 				if (out) cacheSet(key, out);

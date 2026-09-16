@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.4 — 2026-09-16
+
+### 健壮性
+- **悬停路径的本机翻译加了有界超时**（`localTranslateGuarded`，60 秒）：原先悬停会直接 await `localTranslate`，
+  而其看门狗要等 **300 秒**才 reject；一旦 worker 在 `boot` 阶段失败（不算 `fatal`，不会触发自愈）或干脆不回包，
+  `hoverBusy` 会一直是 `true`，**之后所有悬停静默失效、只能刷新页面**。现在超时即解锁 UI、并触发 `resetWorker('hover-timeout')` 自愈，
+  底层的 300 秒看门狗继续负责后续恢复。
+- **悬停路径补齐会话字符上限**：`sessionLimit()` 原来只在自动扫描的 `pump` 里判断，从悬停走在线/自定义引擎会**绕过配额保护**。
+  现在悬停翻译同样计数与拦截，并在状态行提示。
+- 悬停路径的在线/自定义/兜底翻译统一包了 `withTimeout`（15/15/20 秒），避免任何一条链路把 `hoverBusy` 挂死。
+- 新增守护测试：悬停路径必须走有界包装、必须检查会话上限、`hoverBusy` 必须在 `finally` 释放、不得裸调 `translateLong(localTranslate)`。
+
 ## 0.2.3 — 2026-09-16
 
 ### 修复

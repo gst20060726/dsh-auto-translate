@@ -137,6 +137,26 @@ test('悬停模式的实际引擎解析：默认本机离线，可切在线/自�
   s.engine = 'hover'; s.hoverEngine = 'local'
 })
 
+test('悬停路径必须有界：本机翻译超时保护 + 会话上限 + busy 不泄漏', () => {
+  const src = read('client.js')
+  // 1) 本机翻译不能裸调 localTranslate（其看门狗要等 300 秒，会把 hoverBusy 锁死）
+  assert.match(src, /function localTranslateGuarded\(/, '必须有 localTranslateGuarded 包装')
+  assert.match(src, /HOVER_LOCAL_TIMEOUT_MS/, '必须有明确的悬停超时常量')
+  const now = src.match(/async function translateNodeNow\(node\) \{([\s\S]*?)\n\t\t\}/)
+  assert.ok(now, '应能找到 translateNodeNow')
+  assert.match(now[1], /localTranslateGuarded\(/, '悬停翻译本机必须走有界包装')
+  assert.doesNotMatch(now[1], /await translateLong\(localTranslate,/, '悬停路径不得裸调 translateLong(localTranslate)')
+  // 2) 在线/自定义/兜底路径都必须有超时
+  assert.match(now[1], /withTimeout\(translateLong\(onlineTranslate/, '在线路径必须带超时')
+  assert.match(now[1], /withTimeout\(translateLong\(httpTranslate/, '自定义端点路径必须带超时')
+  // 3) 悬停路径必须遵守会话字符上限（原来只在自动扫描的 pump 里判）
+  assert.match(now[1], /sessionLimit\(\)/, '悬停路径必须检查会话上限')
+  // 4) hoverBusy 必须在 finally 里释放
+  const host = src.match(/async function translateHost\(host\) \{([\s\S]*?)\n\t\t\}/)
+  assert.ok(host, '应能找到 translateHost')
+  assert.match(host[1], /finally \{ hoverBusy = false; \}/, 'hoverBusy 必须在 finally 中释放')
+})
+
 test('悬停模式绝不自动扫描，且丢弃自动扫描残留队列', () => {
   const src = read('client.js')
   // 悬停模式：scanRoot 必须直接返回，pump 必须丢弃队列，两者都不得自动翻译

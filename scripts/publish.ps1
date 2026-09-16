@@ -10,7 +10,7 @@
 # tgz / zip / bundle are fully local and need no account.
 # gitee / github / npm ask for your credentials interactively; nothing is stored by this script.
 param(
-  [ValidateSet('tgz', 'zip', 'bundle', 'gitee', 'github', 'npm')]
+  [ValidateSet('tgz', 'zip', 'slimzip', 'bundle', 'gitee', 'github', 'npm')]
   [string]$Target = 'tgz',
   [string]$Remote = ''
 )
@@ -66,6 +66,18 @@ if ($Target -eq 'zip') {
   Write-Output ('size    : ' + [Math]::Round((Get-Item $zip).Length / 1KB, 1) + ' KB')
   Write-Output ('sha256  : ' + (Get-Sha256 $zip))
   Write-Output 'use: create a repo on gitee.com in your browser, then upload these files'
+  exit 0
+}
+
+if ($Target -eq 'slimzip') {
+  Invoke-Tests
+  $zip = Join-Path $root 'dsh-auto-translate-slim.zip'
+  Remove-Item $zip -Force -ErrorAction SilentlyContinue
+  git archive --format=zip -o $zip HEAD
+  Write-Output ('slimzip : ' + $zip)
+  Write-Output ('size    : ' + [Math]::Round((Get-Item $zip).Length / 1KB, 1) + ' KB')
+  Write-Output ('sha256  : ' + (Get-Sha256 $zip))
+  Write-Output 'use: upload these files through the gitee web UI (no wasm, no single-file limit issue)'
   exit 0
 }
 

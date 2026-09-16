@@ -39,6 +39,7 @@ window.__ModuleLoader__.load({
 			minChars: 2,
 			maxNodes: 60,
 			cacheLimit: 4000,
+			translateCode: false,    // 是否连 <pre>/<code>（思考过程常在这里）一起翻译
 			chipCompact: true,       // 默认缩成小圆点，避免遮挡其他按钮
 			chipHidden: false,       // Ctrl+Shift+H 可整只隐藏
 			chipPos: null            // 拖拽后记住 {left, top}
@@ -315,6 +316,34 @@ window.__ModuleLoader__.load({
 		var SKIP_TAGS = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, TEXTAREA: 1, INPUT: 1, SELECT: 1, OPTION: 1, CODE: 1, PRE: 1, KBD: 1, SAMP: 1, VAR: 1, SVG: 1, MATH: 1, CANVAS: 1, IMG: 1, VIDEO: 1, AUDIO: 1, IFRAME: 1, TEMPLATE: 1 };
 		var processed = new WeakSet();
 		var queued = new WeakSet();
+		var dirtyNodes = new Map();      // 正在流式改写的节点 → 最后变动时间（等它稳定再翻，避免与追加剧烈打架）
+		var selfWrites = new WeakMap();  // 我们刚写过的节点 → 时间戳（避免把"自己的写入"当成新内容重翻）
+		var settleTimer = null;
+		var skipReasons = {};            // 诊断用：为什么这段文本没被翻译
+		function bumpSkip(el, why) {
+			var k = why || ('tag:' + ((el && el.tagName) || '?'));
+			skipReasons[k] = (skipReasons[k] || 0) + 1;
+		}
+		function markDirty(node) {
+			if (!node || node.nodeType !== 3) return;
+			dirtyNodes.set(node, Date.now());
+			if (!settleTimer) settleTimer = setInterval(sweepDirty, 300);
+		}
+		function sweepDirty() {
+			var now = Date.now();
+			var ready = [];
+			dirtyNodes.forEach(function (ts, node) {
+				if (!node.isConnected) { dirtyNodes.delete(node); return; }
+				if (now - ts >= 400) ready.push(node);   // 400ms 没再变动 → 视为稳定
+			});
+			for (var i = 0; i < ready.length; i++) {
+				var node = ready[i];
+				dirtyNodes.delete(node);
+				try { processed.delete(node); } catch (e) { }
+				enqueue(node);
+			}
+			if (!dirtyNodes.size && settleTimer) { clearInterval(settleTimer); settleTimer = null; }
+		}
 		var records = [];
 		var recordByNode = new WeakMap();   // node → record（判断某节点当前是否正显示原文）
 		var suppressMutationsUntil = 0;     // 悬停切换期间豁免 MutationObserver，避免被自己重译覆盖
@@ -326,6 +355,7 @@ window.__ModuleLoader__.load({
 		// ===== 本机离线引擎（浏览器内 WASM，推理在 vendor/worker.js） =====
 		var localWorker = null, localPending = new Map(), localSeq = 1, localWarm = false, localProgress = null;
 		var localWarming = false, workerRecoveries = 0, storageInfo = '', progressHideTimer = null;
+		var localLatencySum = 0, localLatencyCount = 0;   // 本机引擎平均耗时（给用户预期）
 		var loadedPairs = {};   // { 'en-zh': true, 'nllb': true }
 		var warmingPair = null;
 		var QUEUE_MAX = 3000;      // 队列上限：超大页面时不再无节制入队
@@ -456,7 +486,14 @@ window.__ModuleLoader__.load({
 		}
 		/** 失败一次就重建 worker 并重试一次（模型已在缓存里，重建代价很小） */
 		async function localTranslate(text, src, tgt) {
-			try { return await localTranslateOnce(text, src, tgt); }
+			var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+			try {
+				var res = await localTranslateOnce(text, src, tgt);
+				var dt = ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - t0;
+				localLatencySum += dt; localLatencyCount++;
+				if (localLatencyCount % 5 === 0) updateStatus();
+				return res;
+			}
 			catch (e) {
 				if (/超时|worker/.test(String(e && e.message))) {
 					resetWorker('auto-retry');
@@ -547,7 +584,11 @@ window.__ModuleLoader__.load({
 
 		function isSkipped(el) {
 			if (!el || el.nodeType !== 1) return true;
-			if (SKIP_TAGS[el.tagName]) return true;
+			if (SKIP_TAGS[el.tagName]) {
+				// 思考过程常被渲染在 <pre>/<code> 里；开启开关后一并翻译
+				if (settings.translateCode && (el.tagName === 'PRE' || el.tagName === 'CODE')) return false;
+				return true;
+			}
 			if (el.isContentEditable) return true;
 			if (el.closest && (el.closest('#' + ROOT_ID) || el.closest('[data-dsh-at-skip]') || el.closest('[translate="no"]'))) return true;
 			if (el.closest && el.closest('.cm-editor, .monaco-editor, .cm-content')) return true;
@@ -596,8 +637,11 @@ window.__ModuleLoader__.load({
 				var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
 				var n, count = 0;
 				while ((n = walker.nextNode())) {
-					if (n.nodeValue && n.nodeValue.trim() && !isSkipped(n.parentElement)) {
-						if (inViewport(n)) enqueue(n); else observeVisible(n.parentElement);
+					if (n.nodeValue && n.nodeValue.trim()) {
+						var pe = n.parentElement;
+						if (isSkipped(pe)) bumpSkip(pe);
+						else if (!inViewport(n)) { bumpSkip(null, 'offscreen'); observeVisible(pe); }
+						else enqueue(n);
 					}
 					if (++count > 500) break;
 				}
@@ -638,6 +682,8 @@ window.__ModuleLoader__.load({
 					if (!inViewport(node)) { observeVisible(el); continue; }
 					if (settings.maxChars && stats.chars >= settings.maxChars) { lastError = '达到本次会话翻译上限 ' + settings.maxChars + ' 字符'; break; }
 					if (records.length >= RECORDS_MAX) { lastError = '已译文条目达到上限 ' + RECORDS_MAX + '，可点「重试」或「还原原文」释放'; break; }
+					var dts = dirtyNodes.get(node);
+					if (dts && Date.now() - dts < 400) continue;   // 仍在流式追加，等它稳定
 					var text = node.nodeValue;
 					if (!text || text.trim().length < settings.minChars) { processed.add(node); continue; }
 					var src = null;
@@ -659,6 +705,7 @@ window.__ModuleLoader__.load({
 					recordByNode.set(node, rec);
 					processed.add(node);
 					node.nodeValue = lead + out + tail;
+					selfWrites.set(node, Date.now());
 					translatedCount++;
 					stats.translated++;
 					stats.chars += text.length;
@@ -706,6 +753,7 @@ window.__ModuleLoader__.load({
 				if (!host.contains(r.node)) continue;
 				if (r.showingOriginal) { r.node.nodeValue = r.translated; r.showingOriginal = false; }
 				else { r.node.nodeValue = r.original; r.showingOriginal = true; }
+				selfWrites.set(r.node, Date.now());
 				changed++;
 			}
 		}
@@ -718,6 +766,7 @@ window.__ModuleLoader__.load({
 				if (!r.node.isConnected) continue;
 				if (anyOriginal) { r.node.nodeValue = r.translated; r.showingOriginal = false; }
 				else { r.node.nodeValue = r.original; r.showingOriginal = true; }
+				selfWrites.set(r.node, Date.now());
 			}
 			if (statusEl) statusEl.textContent = (anyOriginal ? '已全部切回译文' : '已全部切回原文') + '（' + records.length + ' 处）';
 		}
@@ -748,7 +797,7 @@ window.__ModuleLoader__.load({
 		function restoreAll() {
 			for (var i = 0; i < records.length; i++) {
 				var r = records[i];
-				if (r.node.isConnected && r.showingOriginal === false) r.node.nodeValue = r.original;
+				if (r.node.isConnected && r.showingOriginal === false) { r.node.nodeValue = r.original; selfWrites.set(r.node, Date.now()); }
 			}
 			records = [];
 			recordByNode = new WeakMap();
@@ -762,6 +811,7 @@ window.__ModuleLoader__.load({
 		var I18N = {
 			zh: {
 				chipLabel: '译', cacheLabel: '宿主缓存', clearHostCache: '清空宿主缓存', cacheCleared: '宿主缓存已清空',
+				translateCode: '也翻译代码/思考块(实验)', avgLatency: '平均 {ms}ms/句',
 				title: '自动翻译（零 token）', close: '收起', enabled: '启用', target: '目标语言',
 				hoverDelay: '悬停切换(ms)', engine: '引擎', onlineOrder: '在线优先', customTemplate: '自定义模板',
 				latinSource: '拉丁源语言', initOnDevice: '初始化端侧引擎', warmBtn: '预热',
@@ -793,6 +843,7 @@ window.__ModuleLoader__.load({
 			},
 			en: {
 				chipLabel: 'Tr', cacheLabel: 'host cache', clearHostCache: 'Clear host cache', cacheCleared: 'Host cache cleared',
+				translateCode: 'Also translate code/thinking blocks (experimental)', avgLatency: 'avg {ms}ms/sentence',
 				title: 'Auto-translate (zero token)', close: 'Collapse', enabled: 'Enabled', target: 'Target language',
 				hoverDelay: 'Hover toggle (ms)', engine: 'Engine', onlineOrder: 'Online priority', customTemplate: 'Custom template',
 				latinSource: 'Latin source', initOnDevice: 'Init built-in engine', warmBtn: 'Warm up',
@@ -851,11 +902,10 @@ window.__ModuleLoader__.load({
 			for (var i = 0; i < muts.length; i++) {
 				var m = muts[i];
 				if (m.type === 'characterData') {
-					if (suppressing) continue;   // 这多半是我们自己切换原文/译文造成的，不要重译
-					if (m.target && m.target.nodeValue && m.target.nodeValue.trim()) {
-						try { processed.delete(m.target); } catch (e) { }
-						pending.push(m.target);
-					}
+					if (suppressing) continue;
+					var sw = selfWrites.get(m.target);
+					if (sw && Date.now() - sw < 1500) continue;   // 我们自己刚写的，不是新内容
+					if (m.target && m.target.nodeValue && m.target.nodeValue.trim()) markDirty(m.target);
 				} else if (m.addedNodes) {
 					for (var j = 0; j < m.addedNodes.length && j < 40; j++) pending.push(m.addedNodes[j]);
 				}
@@ -880,6 +930,7 @@ window.__ModuleLoader__.load({
 				if (hint) statusEl.textContent += ' | ' + hint;
 			}
 			if (workerRecoveries && statusEl) statusEl.textContent += t('stRecovered').replace('{n}', workerRecoveries);
+			if (localLatencyCount > 0 && statusEl) statusEl.textContent += ' | ' + t('avgLatency').replace('{ms}', Math.round(localLatencySum / localLatencyCount));
 			var paired = Object.keys(loadedPairs);
 			if (paired.length && statusEl) statusEl.textContent += t('stLoaded') + paired.join(',');
 			if (warmingPair && statusEl) statusEl.textContent += t('stWarming') + warmingPair;
@@ -984,6 +1035,7 @@ window.__ModuleLoader__.load({
 				+ '<div class="row"><label data-i18n="singlePair"></label><select data-el="pairSel"><option value="en>zh">en → zh</option><option value="zh>en">zh → en</option><option value="ja>zh">ja → zh (NLLB)</option><option value="ko>zh">ko → zh (NLLB)</option></select><button data-act="warmPair" data-i18n="warmPair"></button></div>'
 				+ '<div class="row"><label data-i18n="abort"></label><button data-act="cancelWarm" data-i18n="cancelWarm"></button></div>'
 				+ '<div class="row"><label data-i18n="compactChip"></label><input type="checkbox" data-set="chipCompact"></div>'
+				+ '<div class="row"><label data-i18n="translateCode"></label><input type="checkbox" data-set="translateCode"></div>'
 				+ '<div class="row"><button data-act="clearHostCache" data-i18n="clearHostCache"></button></div>'
 				+ '<div class="row"><button data-act="resetpos" data-i18n="resetPos"></button><button data-act="hide" data-i18n="hideChip"></button><button data-act="clearcache" data-i18n="clearCache"></button></div>'
 				+ '<div class="row"><button data-act="rescan" data-i18n="rescan"></button><button data-act="restore" data-i18n="restore"></button></div>'
@@ -1207,6 +1259,9 @@ window.__ModuleLoader__.load({
 				detectorDisabled: detectorDisabled, workerRecoveries: workerRecoveries, queue: queue.length, records: records.length,
 				storage: storageInfo, limits: { queue: QUEUE_MAX, records: RECORDS_MAX },
 				loadedPairs: Object.keys(loadedPairs), warmingPair: warmingPair,
+				skipReasons: Object.keys(skipReasons).sort(function (a, b) { return skipReasons[b] - skipReasons[a]; }).slice(0, 8).map(function (k) { return k + '=' + skipReasons[k]; }),
+				avgLatencyMs: localLatencyCount ? Math.round(localLatencySum / localLatencyCount) : 0,
+				pendingSettle: dirtyNodes.size,
 				records: records.length, panelMounted: !!hostEl, enabled: settings.enabled
 			});
 		}
@@ -1302,7 +1357,8 @@ window.__ModuleLoader__.load({
 				enable: setEnabled, warmUp: warmUp, cache: cache, stats: function () { return { cached: cache.size, translated: translatedCount }; },
 				showChip: function () { settings.chipHidden = false; saveSettings(); applySettingsToUI(); },
 				test: testTranslate, diagnose: function () { return diagnose(); }, warmLocal: warmLocal, summon: summonPanel,
-				saveDiag: saveDiagToHost, copyDiag: copyDiag, warmPair: warmPair, cancelWarm: cancelWarm
+				saveDiag: saveDiagToHost, copyDiag: copyDiag, warmPair: warmPair, cancelWarm: cancelWarm,
+				skipReasons: function () { return skipReasons; }
 			};
 			console.info('[dsh-auto-translate] active — on-device, zero LLM tokens');
 		}

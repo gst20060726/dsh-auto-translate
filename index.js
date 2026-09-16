@@ -158,6 +158,12 @@ async function downloadToCache(rel) {
 			const res = await fetch(MODEL_UPSTREAM + '/' + rel, { headers, redirect: 'follow', signal: AbortSignal.timeout(45000) })
 			if (!res.ok && res.status !== 206) throw new Error('HTTP ' + res.status)
 			if (offset > 0 && res.status === 200) offset = 0
+			// 完整性：用上游 Content-Length 校验，避免落盘半截文件（坏图会导致建会话失败）
+			const declared = Number(res.headers.get('content-length') || 0)
+			const expectedTotal = res.status === 206
+				? Number((res.headers.get('content-range') || '').split('/')[1] || 0)
+				: declared
+			const startOffset = offset
 			const ws = createWriteStream(tmp, { flags: offset > 0 ? 'a' : 'w' })
 			for await (const chunk of res.body) {
 				if (!ws.write(chunk)) await once(ws, 'drain')
@@ -165,6 +171,9 @@ async function downloadToCache(rel) {
 			}
 			ws.end()
 			await once(ws, 'finish')
+			if (expectedTotal > 0 && offset !== expectedTotal) {
+				throw new Error('incomplete download: got ' + offset + ' of ' + expectedTotal + ' bytes (from ' + startOffset + ')')
+			}
 			renameSync(tmp, dest)
 			console.log('[dsh-auto-translate] cached ' + rel + ' (' + Math.round(offset / 1048576) + ' MB, attempt ' + attempt + ')')
 			pruneCache(CACHE_CAP_BYTES)

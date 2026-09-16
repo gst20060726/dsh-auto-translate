@@ -293,6 +293,17 @@ window.__ModuleLoader__.load({
 			}
 			return out.join(' ').trim();
 		}
+		// 本次会话字符上限只对「会产生外部额度/带宽成本」的引擎有意义：
+		// 本机离线(WASM)与浏览器端侧都是零成本、不出网，不该被熔断线拦住
+		// （auto 模式下本机模型就绪后同样零成本，故也不设限）。
+		function sessionLimitActive() {
+			var m = settings.engine;
+			return m === 'online' || m === 'custom';
+		}
+		function sessionLimit() {
+			if (!sessionLimitActive()) return 0;
+			return Math.max(0, Number(settings.maxChars) || 0);
+		}
 		async function translateText(text, src, tgt) {
 			var mode = settings.engine;
 			if (mode === 'local') return translateLong(localTranslate, text, src, tgt, 600);
@@ -748,7 +759,8 @@ window.__ModuleLoader__.load({
 					var el = node.parentElement;
 					if (isSkipped(el)) { processed.add(node); continue; }
 					if (!inViewport(node)) { observeVisible(el); continue; }
-					if (settings.maxChars && stats.chars >= settings.maxChars) { lastError = '达到本次会话翻译上限 ' + settings.maxChars + ' 字符'; break; }
+					var lim = sessionLimit();
+					if (lim && stats.chars >= lim) { lastError = '达到本次会话翻译上限 ' + lim + ' 字符（仅在线/自定义引擎计数；点「清零计数」或「重试」可继续）'; break; }
 					if (records.length >= RECORDS_MAX) { lastError = '已译文条目达到上限 ' + RECORDS_MAX + '，可点「重试」或「还原原文」释放'; break; }
 					var dts = dirtyNodes.get(node);
 					if (dts && Date.now() - dts < 400) continue;   // 仍在流式追加，等它稳定
@@ -891,6 +903,7 @@ window.__ModuleLoader__.load({
 				warmLocal: '下载/预热', useLocal: '切到本机', singlePair: '单个语向', warmPair: '预热',
 				abort: '中止', cancelWarm: '取消下载/初始化', compactChip: '挂件缩为小圆点',
 				resetPos: '复位位置', hideChip: '隐藏挂件', clearCache: '清缓存', rescan: '重扫页面',
+				sessionLimit: '会话字符上限(仅在线)', resetChars: '清零计数',
 				restore: '还原原文', saveDiag: '保存诊断到本机', copyDiag: '复制诊断', retry: '重试',
 				toggleAll: '全部原文/译文', helpBtn: '使用指南', lang: '语言', langAuto: '自动',
 				engineAuto: '自动(本机→端侧→在线)', engineLocal: '本机离线(小模型)', engineOnDevice: '端侧仅',
@@ -899,6 +912,7 @@ window.__ModuleLoader__.load({
 				stEngine: '引擎', stOnDevOk: ' · 端侧可用', stOnDevNo: ' · 端侧不可用',
 				stCounters: ' | 扫描 {s} / 入队 {q} / 已译 {t} / 跳过语言 {sl} / 失败 {f}',
 				stFallback: ' / 回退 {fb}', stCache: ' | 缓存 {c}', stPaused: ' | 已暂停',
+				stChars: ' | 本次会话 {u}/{l} 字符(在线计数)',
 				stLast: ' | 最近: ', stTruncated: ' …(完整见下方框/点保存诊断)', stRecovered: ' | worker 自愈 {n} 次',
 				stLoaded: ' | 已加载: ', stWarming: ' | 正在预热 ', stWarm: ' | 本机模型已就绪',
 				stDownloading: ' | 本机模型下载中 ', stWorkerDown: ' | 本机 worker 未启动',
@@ -925,6 +939,7 @@ window.__ModuleLoader__.load({
 				warmLocal: 'Download/warm up', useLocal: 'Use on-device', singlePair: 'Single pair', warmPair: 'Warm up',
 				abort: 'Abort', cancelWarm: 'Cancel download/init', compactChip: 'Collapse chip to a dot',
 				resetPos: 'Reset position', hideChip: 'Hide chip', clearCache: 'Clear cache', rescan: 'Rescan page',
+				sessionLimit: 'Session char cap (online only)', resetChars: 'Reset counter',
 				restore: 'Restore original', saveDiag: 'Save diagnostics', copyDiag: 'Copy diagnostics', retry: 'Retry',
 				toggleAll: 'All original/translated', helpBtn: 'Guide', lang: 'Language', langAuto: 'Auto',
 				engineAuto: 'Auto (local → built-in → online)', engineLocal: 'On-device (small model)', engineOnDevice: 'Built-in only',
@@ -933,6 +948,7 @@ window.__ModuleLoader__.load({
 				stEngine: 'Engine', stOnDevOk: ' · built-in available', stOnDevNo: ' · built-in unavailable',
 				stCounters: ' | scanned {s} / queued {q} / translated {t} / skipped {sl} / failed {f}',
 				stFallback: ' / fallback {fb}', stCache: ' | cache {c}', stPaused: ' | paused',
+				stChars: ' | session {u}/{l} chars (online only)',
 				stLast: ' | last: ', stTruncated: ' ...(full text in the box below / save diagnostics)', stRecovered: ' | worker self-healed {n}x',
 				stLoaded: ' | loaded: ', stWarming: ' | warming ', stWarm: ' | on-device model ready',
 				stDownloading: ' | downloading model ', stWorkerDown: ' | worker not started',
@@ -996,6 +1012,8 @@ window.__ModuleLoader__.load({
 				+ t('stCounters').replace('{s}', stats.scanned).replace('{q}', stats.queued).replace('{t}', stats.translated).replace('{sl}', stats.skippedLang).replace('{f}', stats.failed)
 				+ (stats.fellBack ? t('stFallback').replace('{fb}', stats.fellBack) : '')
 				+ t('stCache').replace('{c}', cache.size) + (settings.enabled ? '' : t('stPaused'));
+			var lim = sessionLimit();
+			if (lim && statusEl) statusEl.textContent += ' | ' + t('stChars').replace('{u}', stats.chars).replace('{l}', lim);
 			if (lastError) {
 				statusEl.textContent += t('stLast') + String(lastError).slice(0, 80) + (String(lastError).length > 80 ? t('stTruncated') : '');
 				var hint = hintFor(lastError);
@@ -1109,6 +1127,7 @@ window.__ModuleLoader__.load({
 				+ '<div class="row"><label data-i18n="multiMode"></label><select data-set="multiMode"><option value="two-hop" data-i18n="mmTwoHop"></option><option value="nllb">NLLB 600M</option></select></div>'
 				+ '<div class="row"><label data-i18n="singlePair"></label><select data-el="pairSel"><option value="en>zh">en → zh</option><option value="zh>en">zh → en</option><option value="ja>zh">ja → zh (NLLB)</option><option value="ko>zh">ko → zh (NLLB)</option></select><button data-act="warmPair" data-i18n="warmPair"></button></div>'
 				+ '<div class="row"><label data-i18n="abort"></label><button data-act="cancelWarm" data-i18n="cancelWarm"></button></div>'
+				+ '<div class="row"><label data-i18n="sessionLimit"></label><input type="number" min="0" step="1000" data-set="maxChars" style="width:96px"><button data-act="resetChars" data-i18n="resetChars"></button></div>'
 				+ '<div class="row"><label data-i18n="compactChip"></label><input type="checkbox" data-set="chipCompact"></div>'
 				+ '<div class="row"><label data-i18n="translateCode"></label><input type="checkbox" data-set="translateCode"></div>'
 				+ '<div class="row"><button data-act="clearHostCache" data-i18n="clearHostCache"></button></div>'
@@ -1172,7 +1191,7 @@ window.__ModuleLoader__.load({
 			cardEl.addEventListener('click', function (e) {
 				var act = e.target && e.target.getAttribute && e.target.getAttribute('data-act');
 				if (act === 'close') cardEl.classList.remove('open');
-				else if (act === 'rescan') scanRoot(document.body, 0);
+				else if (act === 'rescan') { stats.chars = 0; lastError = ''; scanRoot(document.body, 0); updateStatus(); }
 				else if (act === 'restore') restoreAll();
 				else if (act === 'clearcache') { cache.clear(); cacheDirty = true; cacheFlush(); stats.chars = 0; updateStatus(); }
 				else if (act === 'warm') warmUp();
@@ -1186,10 +1205,17 @@ window.__ModuleLoader__.load({
 				else if (act === 'savediag') saveDiagToHost();
 				else if (act === 'retry') {
 					lastError = '';
+					stats.chars = 0;                 // 重试即开启新一轮会话，否则会立刻再次撞上限
 					records = []; recordByNode = new WeakMap(); processed = new WeakSet(); translatedCount = 0;
 					if (!localWarm) warmLocal();
 					scanRoot(document.body, 0);
 					updateStatus();
+				}
+				else if (act === 'resetChars') {
+					stats.chars = 0;
+					lastError = '';
+					updateStatus();
+					scanRoot(document.body, 0);
 				}
 				else if (act === 'toggleAll') toggleAll();
 				else if (act === 'help') {
@@ -1451,6 +1477,7 @@ window.__ModuleLoader__.load({
 		exports.__test = {
 			scriptTag: scriptTag, chunkText: chunkText, comboOf: comboOf, hintFor: hintFor,
 			mmLang: typeof mmLang === 'function' ? mmLang : null, inViewport: inViewport, planSource: planSource,
+			sessionLimitActive: sessionLimitActive, sessionLimit: sessionLimit, settings: settings,
 			limits: { QUEUE_MAX: QUEUE_MAX, RECORDS_MAX: RECORDS_MAX },
 		};
 		return module.exports;

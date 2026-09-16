@@ -81,6 +81,39 @@ test('纯函数行为：语言判定 / 分块 / 热键组合 / 错误提示', ()
   assert.ok(t.limits.QUEUE_MAX > 0 && t.limits.RECORDS_MAX > 0)
 })
 
+test('会话字符上限只作用于在线/自定义引擎（本机离线零成本，不得被拦）', () => {
+  const { mod } = loadClient()
+  const t = mod.__test
+  const s = mod.__test.settings
+  assert.ok(s, '__test 应暴露 settings 以便驱动引擎分支')
+  s.maxChars = 40000
+  const limitFor = (engine) => { s.engine = engine; return t.sessionLimit() }
+  assert.equal(limitFor('local'), 0, '本机离线模型不该有会话上限')
+  assert.equal(limitFor('ondevice'), 0, '端侧引擎不该有会话上限')
+  assert.equal(limitFor('online'), 40000, '在线引擎必须保留上限以保护免费额度')
+  assert.equal(limitFor('custom'), 40000, '自定义端点也计入上限')
+  s.maxChars = 0
+  assert.equal(limitFor('online'), 0, '设为 0 表示在线也不限')
+  s.maxChars = 40000
+})
+
+test('达到上限后「重试」与「清零计数」必须重置本次会话字符数', () => {
+  const src = read('client.js')
+  // retry / rescan / resetChars 三条路径都必须清零 stats.chars，否则会立刻再次撞线
+  const retryBlock = src.match(/act === 'retry'\)\s*\{([\s\S]{0,400}?)\n\s*\}/)
+  assert.ok(retryBlock, '应能找到 retry 分支')
+  assert.match(retryBlock[1], /stats\.chars = 0/, 'retry 必须清零会话字符计数')
+  const resetBlock = src.match(/act === 'resetChars'\)\s*\{([\s\S]{0,300}?)\n\s*\}/)
+  assert.ok(resetBlock, '应能找到 resetChars 分支')
+  assert.match(resetBlock[1], /stats\.chars = 0/, 'resetChars 必须清零会话字符计数')
+  const rescanBlock = src.match(/act === 'rescan'\)([^\n]{0,200})/)
+  assert.ok(rescanBlock, '应能找到 rescan 分支')
+  assert.match(rescanBlock[1], /stats\.chars = 0/, 'rescan 也应清零会话字符计数')
+  // 上限判断必须走 sessionLimit()（引擎感知），不能再用裸 settings.maxChars
+  assert.doesNotMatch(src, /stats\.chars >= settings\.maxChars/, '不得再用裸 settings.maxChars 做判断')
+  assert.match(src, /var lim = sessionLimit\(\)/, '上限判断应使用 sessionLimit()')
+})
+
 test('worker 锁定模型 revision 且映射 NLLB 语言码', () => {
   const stub = { location: { origin: 'http://127.0.0.1:3080' }, postMessage() {}, __test: null }
   const fn = new Function('self', read('vendor/worker.v5.js'))

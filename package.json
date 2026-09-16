@@ -1,0 +1,59 @@
+{
+  "name": "dsh-auto-translate",
+  "version": "0.2.0",
+  "description": "Zero-token auto-translation for the DeepSeek Harness web GUI: on-device WASM translation of foreign text in place, with hover to toggle between the original and the translation.",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "vendor",
+    "scripts"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "plugin",
+    "translate",
+    "translation",
+    "i18n",
+    "on-device",
+    "wasm",
+    "transformers.js",
+    "onnxruntime"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CHANGE_ME/dsh-auto-translate.git"
+  },
+  "homepage": "https://github.com/CHANGE_ME/dsh-auto-translate#readme",
+  "bugs": {
+    "url": "https://github.com/CHANGE_ME/dsh-auto-translate/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "fetch-vendor": "node scripts/fetch-vendor.mjs"
+  }
+}

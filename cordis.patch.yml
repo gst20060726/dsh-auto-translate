@@ -1,0 +1,5 @@
+# dsh-auto-translate bundle patch：只做纯 insert（id + name），
+# 保持纯 insert 才能被热挂载（带 config 会被判定为复杂 patch，只能重启生效）。
+- insert:
+    - id: dsh-auto-translate
+      name: 'dsh-auto-translate'

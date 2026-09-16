@@ -279,17 +279,52 @@ window.__ModuleLoader__.load({
 			}
 			try { return await mymemoryTranslate(text, src, tgt); } catch (e) { return await googleTranslate(text, src, tgt); }
 		}
+		// 按句子边界切块：中日文没有空格，旧版只用 lastIndexOf(' ') 会把句子从中间劈开，
+		// 导致模型拿到半个句子 → 语法与指代崩坏（用户反馈的"语句不通"主要来自这里）。
+		function splitSentences(text) {
+			var out = [], buf = '';
+			for (var i = 0; i < text.length; i++) {
+				var ch = text.charAt(i);
+				buf += ch;
+				// 句末标点（中英日通用）+ 段落换行处断句
+				if (ch === '。' || ch === '！' || ch === '？' || ch === '；' || ch === '…' ||
+					ch === '.' || ch === '!' || ch === '?' || ch === ';' || ch === '\n') {
+					if (ch === '.' && i > 0 && i + 1 < text.length) {
+						var nxt = text.charAt(i + 1);
+						// 小数点/缩写不算句末：后面紧跟数字或字母时不断句
+						if (/[0-9A-Za-z]/.test(nxt)) continue;
+					}
+					if (buf.trim()) out.push(buf);
+					buf = '';
+				}
+			}
+			if (buf.trim()) out.push(buf);
+			return out.length ? out : [text];
+		}
 		function chunkText(text, size) {
 			if (text.length <= size) return [text];
-			var parts = [], rest = text;
-			while (rest.length > size) {
-				var cut = rest.lastIndexOf(' ', size);
-				if (cut < size * 0.5) cut = size;
-				parts.push(rest.slice(0, cut));
-				rest = rest.slice(cut);
+			var sents = splitSentences(text);
+			// 单句本身就超长（超长无标点段落）：退化为按空格/硬切
+			var parts = [], cur = '';
+			for (var i = 0; i < sents.length; i++) {
+				var s = sents[i];
+				if (cur && (cur.length + s.length) > size) { parts.push(cur); cur = ''; }
+				if (s.length > size) {
+					if (cur) { parts.push(cur); cur = ''; }
+					var rest = s;
+					while (rest.length > size) {
+						var cut = rest.lastIndexOf(' ', size);
+						if (cut < size * 0.5) cut = size;
+						parts.push(rest.slice(0, cut));
+						rest = rest.slice(cut);
+					}
+					cur = rest;
+				} else {
+					cur += s;
+				}
 			}
-			if (rest) parts.push(rest);
-			return parts;
+			if (cur) parts.push(cur);
+			return parts.length ? parts : [text];
 		}
 		async function translateLong(fn, text, src, tgt, size) {
 			var chunks = chunkText(text, Math.max(200, size || settings.maxChunk || 1000));
@@ -910,25 +945,58 @@ window.__ModuleLoader__.load({
 			} finally { hoverBusy = false; }
 		}
 		// 找鼠标下面真正该翻译的那一块（向上找到最小且自身直接含文本的祖先）
-		function hoverTargetOf(el) {
+		// 返回该块当前的悬停态：'none' 未翻 / 'translated' 已是译文 / 'original' 已被切回原文
+		function hoverHostState(el) {
 			var cur = el;
 			while (cur && cur !== document.body && cur.nodeType === 1) {
-				if (cur.hasAttribute && cur.hasAttribute('data-dsh-at')) return null;   // 这块已翻过，保持译文
-				if (collectOwnTextNodes(cur).length) return isSkipped(cur) ? null : cur;  // 面板/代码块/输入框不翻
+				if (cur.hasAttribute && cur.hasAttribute('data-dsh-at')) {
+					return { host: cur, state: cur.getAttribute('data-dsh-at') };
+				}
+				if (collectOwnTextNodes(cur).length) return isSkipped(cur) ? null : { host: cur, state: 'none' };
 				cur = cur.parentElement;
 			}
 			return null;
+		}
+		// 把某一块整体在译文/原文之间切换（悬停第二次即复原）
+		function flipHost(host) {
+			var changed = 0;
+			for (var i = 0; i < records.length && changed < 400; i++) {
+				var r = records[i];
+				if (!r.node.isConnected || !host.contains(r.node)) continue;
+				if (r.showingOriginal) { r.node.nodeValue = r.translated; r.showingOriginal = false; }
+				else { r.node.nodeValue = r.original; r.showingOriginal = true; }
+				selfWrites.set(r.node, Date.now());
+				changed++;
+			}
+			if (!changed) return false;
+			var anyOriginal = false;
+			for (var j = 0; j < records.length; j++) {
+				var rr = records[j];
+				if (rr.node.isConnected && host.contains(rr.node) && rr.showingOriginal) { anyOriginal = true; break; }
+			}
+			host.setAttribute('data-dsh-at', anyOriginal ? 'original' : 'translated');
+			suppressMutationsUntil = Date.now() + 1500;
+			updateStatus();
+			return true;
 		}
 		function onOverHoverMode(e) {
 			if (!settings.enabled || hoverBusy) return;
 			var el = e.target && e.target.nodeType === 1 ? e.target : null;
 			if (!el || !el.closest) return;
-			var host = hoverTargetOf(el);
-			if (!host || host === hoverHost) return;
-			if (hoverTimer) clearTimeout(hoverTimer);
-			hoverHost = host;
-			var delay = e.altKey ? 60 : Math.max(0, settings.hoverDelayMs);
-			hoverTimer = setTimeout(function () { if (hoverHost === host) translateHost(host); }, delay);
+			var hit = hoverHostState(el);
+			if (!hit) return;
+			if (hit.host !== hoverHost) {
+				if (hoverTimer) clearTimeout(hoverTimer);
+				hoverHost = hit.host;
+				var delay = e.altKey ? 60 : Math.max(0, settings.hoverDelayMs);
+				var host = hit.host, state = hit.state;
+				// 第一次停留 → 翻译；再次停留同一块 → 在译文/原文之间来回切
+				hoverTimer = setTimeout(function () {
+					if (hoverHost !== host) return;
+					if (state === 'none') translateHost(host);
+					else flipHost(host);
+				}, delay);
+			}
 		}
 
 		function onOver(e) {
@@ -1040,7 +1108,7 @@ window.__ModuleLoader__.load({
 				toggleAll: '全部原文/译文', helpBtn: '使用指南', lang: '语言', langAuto: '自动',
 				engineHover: '悬停翻译(不自动翻)', engineAuto: '自动(本机→端侧→在线)', engineLocal: '本机离线(小模型)', engineOnDevice: '端侧仅',
 				engineOnline: '在线免密钥', engineCustom: '自定义端点', engineOff: '关闭',
-				footerHint: '悬停 0.6 秒翻译鼠标下那一块（默认模式）；Alt+悬停可立即触发。快捷键（可改键）：Ctrl+Alt+T 呼出面板 · Ctrl+Alt+H 显示/隐藏圆点 · Ctrl+Alt+P 暂停/恢复。全程不调用大模型。',
+				footerHint: '悬停 0.6 秒翻译鼠标下那一块；**再次停留同一块**即复原为原文，可反复切换（默认模式）。Alt+悬停可立即触发。快捷键（可改键）：Ctrl+Alt+T 呼出面板 · Ctrl+Alt+H 显示/隐藏圆点 · Ctrl+Alt+P 暂停/恢复。全程不调用大模型。',
 				stEngine: '引擎', stOnDevOk: ' · 端侧可用', stOnDevNo: ' · 端侧不可用',
 				stCounters: ' | 扫描 {s} / 入队 {q} / 已译 {t} / 跳过语言 {sl} / 失败 {f}',
 				stFallback: ' / 回退 {fb}', stCache: ' | 缓存 {c}', stPaused: ' | 已暂停',
@@ -1076,7 +1144,7 @@ window.__ModuleLoader__.load({
 				toggleAll: 'All original/translated', helpBtn: 'Guide', lang: 'Language', langAuto: 'Auto',
 				engineHover: 'Hover to translate (no auto)', engineAuto: 'Auto (local → built-in → online)', engineLocal: 'On-device (small model)', engineOnDevice: 'Built-in only',
 				engineOnline: 'Online keyless', engineCustom: 'Custom endpoint', engineOff: 'Off',
-				footerHint: 'Hover a block for ~0.6s to translate just that block (default mode); Alt+hover triggers instantly. Hotkeys (rebindable): Ctrl+Alt+T panel · Ctrl+Alt+H chip · Ctrl+Alt+P pause. No LLM is ever called.',
+				footerHint: 'Hover a block for ~0.6s to translate it; hover the SAME block again to restore the original — repeats forever (default mode). Alt+hover triggers instantly. Hotkeys (rebindable): Ctrl+Alt+T panel · Ctrl+Alt+H chip · Ctrl+Alt+P pause. No LLM is ever called.',
 				stEngine: 'Engine', stOnDevOk: ' · built-in available', stOnDevNo: ' · built-in unavailable',
 				stCounters: ' | scanned {s} / queued {q} / translated {t} / skipped {sl} / failed {f}',
 				stFallback: ' / fallback {fb}', stCache: ' | cache {c}', stPaused: ' | paused',
@@ -1625,6 +1693,7 @@ window.__ModuleLoader__.load({
 		exports.__test = {
 			scriptTag: scriptTag, chunkText: chunkText, comboOf: comboOf, hintFor: hintFor,
 			mmLang: typeof mmLang === 'function' ? mmLang : null, inViewport: inViewport, planSource: planSource,
+			splitSentences: splitSentences,
 			sessionLimitActive: sessionLimitActive, sessionLimit: sessionLimit, settings: settings,
 			actualModeFor: actualModeFor,
 			limits: { QUEUE_MAX: QUEUE_MAX, RECORDS_MAX: RECORDS_MAX },

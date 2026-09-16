@@ -147,6 +147,45 @@ test('E2E: 流式追加的文本只在稳定后才翻译（不与追加剧烈打
   }
 })
 
+test('E2E 悬停模式: 悬停翻译该块后，再次悬停同一块可复原为原文', { skip }, async () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><body><div id="a"><p id="p1">Hello world, this needs translation.</p></div></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true },
+  )
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      version: 4, engine: 'hover', hoverEngine: 'local', target: 'zh', latinSource: 'en',
+      hoverDelayMs: 120, minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
+    }))
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const p1 = window.document.getElementById('p1')
+    const node = p1.firstChild
+    const original = node.nodeValue
+    loadClientInto(window).apply({})
+
+    // 第一次悬停 → 翻译
+    p1.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+    assert.ok(await waitFor(() => /ZH</.test(node.nodeValue), 3000), '第一次悬停应翻译，实际: ' + JSON.stringify(node.nodeValue))
+    // 移开：译文保持
+    p1.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true, relatedTarget: window.document.body }))
+    await sleep(200)
+    assert.ok(/ZH</.test(node.nodeValue), '移开后应保持译文，实际: ' + JSON.stringify(node.nodeValue))
+    // 再次悬停同一块 → 复原为原文
+    p1.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+    assert.ok(await waitFor(() => node.nodeValue === original, 3000), '再次悬停应复原为原文，实际: ' + JSON.stringify(node.nodeValue))
+    // 第三次悬停 → 又变回译文（可反复切换）
+    p1.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true, relatedTarget: window.document.body }))
+    await sleep(150)
+    p1.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+    assert.ok(await waitFor(() => /ZH</.test(node.nodeValue), 3000), '第三次悬停应再次显示译文，实际: ' + JSON.stringify(node.nodeValue))
+  } finally {
+    window.close()
+  }
+})
+
 test('E2E 悬停模式: 加载后不自动翻译任何内容，悬停后才翻译该块', { skip }, async () => {
   const dom = new JSDOM(
     '<!doctype html><html><body><div id="a"><p id="p1">Hello world, this needs translation.</p></div></body></html>',

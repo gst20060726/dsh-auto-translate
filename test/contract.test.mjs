@@ -97,6 +97,27 @@ test('会话字符上限只作用于在线/自定义引擎（本机离线零成�
   s.maxChars = 40000
 })
 
+test('分块按句子边界切，不把句子劈成两半（质量回归）', () => {
+  const t = loadClient().mod.__test
+  // 中文长段：没有空格，旧实现会把句子从中间切开
+  const zh = '第一句很短。第二句也不长。第三句稍微长一点点但要保证能被完整保留。第四句结束。'
+  const parts = t.chunkText(zh, 20)
+  assert.ok(parts.length > 1, '长文本应被切块')
+  assert.equal(parts.join(''), zh, '切块不得丢字符')
+  for (const p of parts) assert.ok(p.length <= 20, '每块都不应超过上限，实际 ' + p.length + ': ' + JSON.stringify(p))
+  // 关键：除最后一块外都应以句末标点结尾（说明没有从句子中间劈开）
+  for (const p of parts.slice(0, -1)) {
+    assert.match(p, /[。！？；…]$/, '块应以句末标点结束，实际: ' + JSON.stringify(p))
+  }
+  // 英文小数点不应被当作句末
+  assert.equal(t.splitSentences('Pi is 3.14159 exactly. That is short.').length, 2, '小数点不应断句')
+  // 单句超长时必须能退化处理，且不丢字符、不超上限
+  const long = 'A'.repeat(500)
+  const lp = t.chunkText(long, 100)
+  assert.equal(lp.join(''), long, '单句超长时也不得丢字符')
+  for (const p of lp) assert.ok(p.length <= 100, '退化分块也要遵守上限')
+})
+
 test('悬停模式的实际引擎解析：默认本机离线，可切在线/自定义', () => {
   const { mod } = loadClient()
   const t = mod.__test

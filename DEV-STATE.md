@@ -7,6 +7,7 @@
 - 版本 0.2.0 ｜ 本地 git 仓库（`git log --oneline -1` 看最新提交）
 - 已安装为 profile link：`dsh plugin --profile web add link:C:/Users/20549/.dsh/plugins/dsh-auto-translate`
 - 已上线镜像：**https://gitee.com/nysjn/dsh-auto-translate.git**（远端名 `gitee`，`main` 跟踪 `gitee/main`）
+- 已发布 npm：**dsh-auto-translate@0.2.0**（2026-09-16 22:29，维护者 nysjn）→ 别人 `dsh plugin --profile web add dsh-auto-translate`
 - 生效方式：改完 `index.js` 或 `client.js` 必须**重启 dsh web**；`vendor/` 下的文件是运行时按需加载，改动无需重启
 
 ## 关键路径
@@ -42,6 +43,35 @@
 - 判断凭据是否有效：`git push --dry-run https://gitee.com/nysjn/__not-a-repo__.git main`
   返回 `remote: 404 not found!` 说明**认证已通过**（只是仓库不存在）；返回 401 才是凭据无效。
 - push 需要 GUI 会话才能弹凭据窗，前台跑会被工具超时掐断；用后台任务 + 日志文件观察。
+
+## 发布到 npm（踩过的坑）
+
+- 账号 `nysjn`（邮箱 3305406477@qq.com，会公开显示在包页上）。包名 `dsh-auto-translate`，2026-09-16 发布 0.2.0。
+- **坑 1：`npm login --auth-type=web` 不能放在后台任务里跑**——拿不到 stdin 时会退化成 `Username:` 提示，
+  空提交直接 exit 1，`.npmrc` 不生成（`npm whoami` 仍 ENEEDAUTH）。必须让用户在**自己的终端**里跑。
+- **坑 2：注册时的「邮箱一次性密码」不等于 npm 登录密码**，别混。
+- **坑 3：npm 现在拒绝「没开 2FA 的账号」发布**，报
+  `E403 ... Two-factor authentication or granular access token with bypass 2fa enabled is required to publish packages`。
+  `npm profile get` 里 `tfa: False` 就是根因。加 `--otp=` 也无效（账号没开 2FA 时服务器不校验 OTP）。
+- **可行解**：在 https://www.npmjs.com/settings/nysjn/tokens 建 **Granular Access Token**，必须做到三件事——
+  ① 勾 `Bypass two-factor authentication (2FA)`；② Permissions 选 `Read and write (publish and stage)`；
+  ③ Select packages 选 `All packages`。三项缺一，生成的令牌权限就是空的（Summary 会写 `0 packages`）。
+- 发布命令（令牌只临时用一次，发完立刻删）：
+  `npm config set //registry.npmjs.org/:_authToken=<令牌>` → `npm publish --access public` → `npm config delete //registry.npmjs.org/:_authToken`
+- 两个反直觉点：① `www.npmjs.com` 对脚本请求返回 **403**（Cloudflare），但 `registry.npmjs.com` 正常；
+  ② **npm 没有网页上传 tgz 的入口**，`npmjs.com/package/upload` 会被当成「包名 upload」解析，别被误导。
+- 发布后 `npm view` 可能仍 404 数十秒（CDN 未刷新），**不代表失败**；以 `npm publish` 输出里的
+  `+ dsh-auto-translate@0.2.0` 为准。
+- 官方公告：bypass-2fa 令牌 **2027 年 1 月起不能再直接发布**，届时需改用 Trusted Publishing（依赖 GitHub Actions，
+  本机 GitHub 不通）或 staged publishing。以后要发新版本，最省事的仍是「临时建一枚 bypass 令牌 → 发 → 吊销」。
+
+## GitHub 不可达（实测）
+
+- `github.com` 的 git smart-http 请求挂到 180 秒超时，网页也打不开（无 VPN），三个 npm/gitee 域名则都通。
+- 因此插件市场的**自动收录**（要求 GitHub 仓库 + `dsh-plugin` 话题）与 OIDC 可信发布都走不了；
+  分发只靠 Gitee 镜像 + npm + 本地 tgz 三条。
+- 插件市场里已有一个**同名**的 `dsh-auto-translate`（作者 qwert702，GitHub 仓库，★2），
+  走的是「调用模型翻译」路线，与本插件（浏览器内 WASM、零 token）是两套东西，注意别混淆。
 
 ## 重启的正确姿势（踩过的坑）
 

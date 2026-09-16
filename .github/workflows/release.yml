@@ -25,6 +25,12 @@ jobs:
           node --check vendor/worker.v4.js
           node -e "const p=require('./package.json');if(!p.dsh||!p.dsh.bundle||!p.dsh.client){throw new Error('missing dsh manifest')};console.log('manifest ok:',p.name,p.version)"
 
+      - name: Offline tests (contract + i18n completeness)
+        run: npm test
+
+      - name: Package dry-run
+        run: npm pack --dry-run
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

@@ -26,6 +26,7 @@ const ROUTE_PREFIX = '/dsh-auto-translate/vendor'
 // 跨域重定向后 CORS 头不可靠（浏览器报 Failed to fetch），故由宿主半转发。
 const MODEL_PREFIX = '/dsh-auto-translate/model-v2'
 const DIAG_PATH = '/dsh-auto-translate/diag'
+const CACHE_INFO_PATH = '/dsh-auto-translate/cache-info'
 const DIAG_DIR = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'dsh-auto-translate')
 // 模型磁盘缓存：一次下好（带断点续传与重试），之后从本地磁盘直接发，避免流式转发时上游卡死
 const MODEL_CACHE_DIR = join(DIAG_DIR, 'models')
@@ -33,6 +34,15 @@ const MODEL_CACHE_DIR = join(DIAG_DIR, 'models')
 // 首次使用时从这里取回并由浏览器长缓存，用户亦可跑 `npm run fetch-vendor` 换成完全离线。
 const ORT_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.26.0-dev.20260416-b7804b056c/dist/'
 const ORT_CACHE_DIR = join(DIAG_DIR, 'ort-cache')
+
+/**
+ * 模型缓存的键：把 URL 里的 revision 段归一化。
+ * 这样 worker 锁定的 sha 变化时（升级模型/回滚版本），本地已下载的权重仍然复用，
+ * 不会因为 URL 变了就白下几百 MB。
+ */
+function cacheRelOf(rel) {
+	return rel.replace(/\/resolve\/[^/]+\//, '/resolve/_rev/')
+}
 const MODEL_UPSTREAM = 'https://hf-mirror.com'
 const ALLOWED_REPOS = new Set([
 	'Xenova/opus-mt-en-zh',
@@ -41,6 +51,38 @@ const ALLOWED_REPOS = new Set([
 ])
 
 // 客户端诊断落盘：用户点「保存诊断到本机」→ 写文件，便于排障时直接读盘（不必复制长文本）
+/** 递归统计目录字节数（缓存可见性：避免用户磁盘被模型悄悄吃掉） */
+function dirSize(dir) {
+	let total = 0
+	try {
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const p = join(dir, entry.name)
+			if (entry.isDirectory()) total += dirSize(p)
+			else if (entry.isFile()) { try { total += statSync(p).size } catch { /* skip */ } }
+		}
+	} catch { /* missing dir */ }
+	return total
+}
+
+function serveCacheInfo(req, res) {
+	try {
+		const models = dirSize(MODEL_CACHE_DIR)
+		const ort = dirSize(ORT_CACHE_DIR)
+		res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+		res.end(JSON.stringify({
+			ok: true,
+			modelsBytes: models,
+			ortBytes: ort,
+			totalBytes: models + ort,
+			modelsDir: MODEL_CACHE_DIR,
+			ortDir: ORT_CACHE_DIR,
+		}))
+	} catch (err) {
+		res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' })
+		res.end(JSON.stringify({ ok: false, error: String((err && err.message) || err) }))
+	}
+}
+
 async function saveDiag(req, res) {
 	try {
 		const chunks = []
@@ -70,7 +112,7 @@ async function saveDiag(req, res) {
 }
 
 async function downloadToCache(rel) {
-	const dest = join(MODEL_CACHE_DIR, rel)
+	const dest = join(MODEL_CACHE_DIR, cacheRelOf(rel))
 	mkdirSync(dirname(dest), { recursive: true })
 	const tmp = dest + '.part'
 	let attempt = 0
@@ -112,7 +154,7 @@ async function proxyModel(req, res) {
 			res.end('repo not allowed')
 			return
 		}
-		const cached = join(MODEL_CACHE_DIR, rel)
+		const cached = join(MODEL_CACHE_DIR, cacheRelOf(rel))
 		const cachedOk = existsSync(cached) && statSync(cached).size > 0
 		console.log('[dsh-auto-translate] model ' + (cachedOk ? 'HIT ' : 'MISS ') + rel)
 		if (!cachedOk) await downloadToCache(rel)
@@ -267,6 +309,19 @@ export function apply(ctx) {
 					return
 				}
 				proxyModel(req, res)
+			},
+		})
+		safeRegister({
+			kind: 'exact',
+			path: CACHE_INFO_PATH,
+			handler: (req, res) => {
+				const hostName = String(req.headers.host || '').split(':')[0]
+				if (!/^(127\.0\.0\.1|localhost|\[::1\]|::1)$/.test(hostName)) {
+					res.writeHead(403, { 'Content-Type': 'text/plain' })
+					res.end('loopback only')
+					return
+				}
+				serveCacheInfo(req, res)
 			},
 		})
 		safeRegister({

@@ -351,6 +351,17 @@ window.__ModuleLoader__.load({
 			if (/worker/i.test(m)) return t('hintWorker');
 			return '';
 		}
+		var hostCacheInfo = '';
+		function refreshHostCacheInfo() {
+			try {
+				fetch('/dsh-auto-translate/cache-info').then(function (r) { return r.json(); }).then(function (j) {
+					if (j && j.ok) {
+						hostCacheInfo = '宿主缓存 ' + (j.totalBytes / 1073741824).toFixed(2) + 'GB';
+						updateStatus();
+					}
+				}).catch(function () { });
+			} catch (e) { }
+		}
 		function requestPersist() {
 			try {
 				if (navigator.storage && navigator.storage.persist) {
@@ -872,6 +883,7 @@ window.__ModuleLoader__.load({
 			var paired = Object.keys(loadedPairs);
 			if (paired.length && statusEl) statusEl.textContent += t('stLoaded') + paired.join(',');
 			if (warmingPair && statusEl) statusEl.textContent += t('stWarming') + warmingPair;
+			if (hostCacheInfo && statusEl) statusEl.textContent += ' | ' + hostCacheInfo;
 			var errBoxEl = cardEl && cardEl.querySelector('[data-el="errbox"]');
 			if (errBoxEl) {
 				if (lastError) { errBoxEl.value = String(lastError); errBoxEl.style.display = 'block'; }
@@ -1288,6 +1300,7 @@ window.__ModuleLoader__.load({
 		function apply(ctx) {
 			try {
 				if (document.body) start();
+			refreshHostCacheInfo();
 				else document.addEventListener('DOMContentLoaded', start, { once: true });
 			} catch (e) { console.warn('[dsh-auto-translate]', e); }
 		}

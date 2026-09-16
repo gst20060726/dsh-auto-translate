@@ -51,17 +51,6 @@
 > 插件市场的**自动收录**需要 GitHub 仓库带 [[dsh-plugin]] 话题；打不开 GitHub 时用上面三种分发即可，功能完全一样。
 > 包内**不含** 74MB 的 ONNX Runtime wasm（首次使用时宿主端从 CDN 取回并缓存）；要完全离线，先 [[npm run fetch-vendor]] 再打包。
 
-### 没有 GitHub 也能分发（三种都验证过）
-
-| 方式 | 你要做的 | 别人怎么装 |
-| --- | --- | --- |
-| **本地 tgz（最省事）** | [[npm pack]] 得到 [[dsh-auto-translate-0.2.0.tgz]]（约 236KB），把文件发出去 | [[dsh plugin --profile web add /对方/的路径/dsh-auto-translate-0.2.0.tgz]] |
-| **Gitee 镜像（国内可推）** | 在 gitee 建仓库 → [[git remote add gitee https://gitee.com/<你>/dsh-auto-translate.git]] → [[git push -u gitee main]] | [[dsh plugin --profile web add 'git+https://gitee.com/<你>/dsh-auto-translate.git#<commit>']] |
-| **npm（不需要 GitHub）** | [[npm login]] → [[npm publish --access public]] | [[dsh plugin --profile web add dsh-auto-translate]] |
-
-> 插件市场的**自动收录**需要 GitHub 仓库带 [[dsh-plugin]] 话题；若打不开 GitHub，用上面三种方式分发即可，功能完全一样。
-> 包内不含 74MB 的 ONNX Runtime wasm（首次使用时由宿主端从 CDN 取回并缓存）；要完全离线安装，先 [[npm run fetch-vendor]] 再打包。
-
 ## 使用
 
 | 操作 | 效果 |
@@ -113,7 +102,7 @@
     |- index.js              # 宿主半：静态资源路由 + 模型同源代理 + 诊断落盘
     |- client.js             # 浏览器半：扫描/翻译/悬停切换/设置面板
     |- vendor/
-    |   |- worker.v4.js      # Web Worker：WASM 推理、按语向懒加载、精度回退
+    |   |- worker.v5.js      # Web Worker：SharedWorker 单实例推理、按语向懒加载
     |   |- transformers.esm.v2.js  # transformers.js 浏览器 ESM（ORT 引用已指向本地）
     |   |- ort/              # ONNX Runtime 的 wasm 与加载器
     |- scripts/fetch-vendor.mjs    # 重新生成 vendor/（仓库可不带大文件）

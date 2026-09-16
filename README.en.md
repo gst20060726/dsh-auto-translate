@@ -79,7 +79,7 @@ Quantized exports of these repos trigger the ONNX Runtime error `TransposeDQWeig
     index.js      # host: static vendor route, same-origin model proxy with disk cache, diagnostics sink
     client.js     # browser: DOM scan, translation, hover toggle, settings panel
     vendor/
-      worker.v4.js          # Web Worker: WASM inference, lazy per-pair pipelines
+      worker.v5.js          # Web Worker: SharedWorker single-owner WASM inference, lazy per-pair pipelines
       transformers.esm.v2.js# transformers.js browser ESM with local ORT imports
       ort/                  # ONNX Runtime loaders (+ wasm fetched from CDN if absent)
     scripts/fetch-vendor.mjs# regenerate vendor/ for a fully offline install

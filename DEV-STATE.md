@@ -7,11 +7,14 @@
 - 版本 0.2.2 ｜ 本地 git 仓库（`git log --oneline -1` 看最新提交）
 - 已安装为 profile link：`dsh plugin --profile web add link:C:/Users/20549/.dsh/plugins/dsh-auto-translate`
 - 已上线镜像：**https://gitee.com/nysjn/dsh-auto-translate.git**（远端名 `gitee`，`main` 跟踪 `gitee/main`）
-- 已发布 npm：**dsh-auto-translate@0.2.0**（2026-09-16 22:29，维护者 nysjn）→ 别人 `dsh plugin --profile web add dsh-auto-translate`
-  - ⚠️ **0.2.1 / 0.2.2 都还没发到 npm**！0.2.1 那次 `npm publish` 明明打印了成功行 `+ dsh-auto-translate@0.2.1`，
-    但 registry 上只有 0.2.0、`0.2.1.tgz` 是 404、`time.modified` 仍停在 0.2.0 的发布时间 → **伪装成成功的失败**，原因待查
-    （优先怀疑那枚 bypass 令牌的包范围/权限没生效）。排查办法：`npm view <pkg> --json` 看 `time` 与 `versions`，
-    再 HEAD 一下 `https://registry.npmjs.org/<pkg>/-/<pkg>-<ver>.tgz` 是否存在，**不要只看 publish 的输出**。
+- 已发布 npm：**dsh-auto-translate@0.2.1**（latest）｜ 0.2.0 也在线上 ｜ **0.2.2 尚未发布**
+  - 别人安装：`dsh plugin --profile web add dsh-auto-translate`（拿到的是 latest = 0.2.1，**还没有悬停翻译模式**）
+  - ✅ **更正**：0.2.1 当时并非「发布失败」——`npm publish` 打印成功行后，registry 的 packument 与 tarball
+    **同步有延迟（实测约 3~5 分钟）**，我当时立刻查询才看到 404。现在 0.2.1 的 tarball 已可正常下载。
+    教训：**判定发布成功要轮询几分钟**，别用发布后立刻的第一次查询下结论；也不要只看 publish 的输出。
+    排查办法：`npm view <pkg> --json` 看 `time` 与 `versions`，再 HEAD 一下
+    `https://registry.npmjs.org/<pkg>/-/<pkg>-<ver>.tgz`。
+  - 每次发布的令牌流程见下面「发布到 npm」一节（临时 bypass 令牌 → 发 → 立即删除 → 回 npm 吊销）
 - 生效方式：改完 `index.js` 或 `client.js` 必须**重启 dsh web**；`vendor/` 下的文件是运行时按需加载，改动无需重启
   - 判断是否已重启：`(Get-NetTCPConnection -LocalPort 3080 -State Listen).OwningProcess` 取 PID，比该进程 `StartTime` 与 `client.js` 的 `LastWriteTime`
 

@@ -29,6 +29,10 @@ const DIAG_PATH = '/dsh-auto-translate/diag'
 const DIAG_DIR = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'dsh-auto-translate')
 // 模型磁盘缓存：一次下好（带断点续传与重试），之后从本地磁盘直接发，避免流式转发时上游卡死
 const MODEL_CACHE_DIR = join(DIAG_DIR, 'models')
+// 仓库默认只带小文件（bundle/loader）；体积大的 ORT wasm 若本地缺失，
+// 首次使用时从这里取回并由浏览器长缓存，用户亦可跑 `npm run fetch-vendor` 换成完全离线。
+const ORT_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.26.0-dev.20260416-b7804b056c/dist/'
+const ORT_CACHE_DIR = join(DIAG_DIR, 'ort-cache')
 const MODEL_UPSTREAM = 'https://hf-mirror.com'
 const ALLOWED_REPOS = new Set([
 	'Xenova/opus-mt-en-zh',
@@ -133,7 +137,30 @@ const CONTENT_TYPES = {
 	'.txt': 'text/plain; charset=utf-8',
 }
 
-function serveVendor(req, res) {
+async function fetchOrtFallback(name) {
+	if (!/^[A-Za-z0-9._-]+$/.test(name)) return null
+	const local = join(ORT_CACHE_DIR, name)
+	try {
+		if (existsSync(local) && statSync(local).size > 0) return local
+	} catch { /* fall through to download */ }
+	try {
+		mkdirSync(ORT_CACHE_DIR, { recursive: true })
+		const res = await fetch(ORT_CDN + name, { signal: AbortSignal.timeout(90000) })
+		if (!res.ok) {
+			console.log('[dsh-auto-translate] ort fallback failed ' + res.status + ' ' + name)
+			return null
+		}
+		const buf = Buffer.from(await res.arrayBuffer())
+		writeFileSync(local, buf)
+		console.log('[dsh-auto-translate] ort fetched from CDN: ' + name + ' (' + Math.round(buf.length / 1048576) + 'MB)')
+		return local
+	} catch (err) {
+		console.log('[dsh-auto-translate] ort fallback error ' + name + ' — ' + String((err && err.message) || err))
+		return null
+	}
+}
+
+async function serveVendor(req, res) {
 	try {
 		const url = new URL(req.url ?? '/', 'http://localhost')
 		let rel = decodeURIComponent(url.pathname.slice(ROUTE_PREFIX.length))
@@ -150,6 +177,22 @@ function serveVendor(req, res) {
 			return
 		}
 		if (!existsSync(file) || !statSync(file).isFile()) {
+			// CDN 兜底：只对 ort/ 下的运行时文件生效（wasm / loader）
+			if (rel.startsWith('ort/')) {
+				const viaCdn = await fetchOrtFallback(rel.slice(4))
+				if (viaCdn) {
+					const cdnExt = extname(viaCdn).toLowerCase()
+					res.writeHead(200, {
+						'Content-Type': CONTENT_TYPES[cdnExt] ?? 'application/octet-stream',
+						'Content-Length': statSync(viaCdn).size,
+						'Cache-Control': cdnExt === '.wasm' ? 'public, max-age=31536000, immutable' : 'no-cache',
+						'Cross-Origin-Resource-Policy': 'same-origin',
+					})
+					if (req.method === 'HEAD') { res.end(); return }
+					createReadStream(viaCdn).pipe(res)
+					return
+				}
+			}
 			res.writeHead(404, { 'Content-Type': 'text/plain' })
 			res.end('not found')
 			return
@@ -193,7 +236,7 @@ export function apply(ctx) {
 					res.end('method not allowed')
 					return
 				}
-				serveVendor(req, res)
+				void serveVendor(req, res)
 			},
 		})
 		webServer.register({

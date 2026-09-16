@@ -71,6 +71,7 @@
 - 模型经插件自带的**同源代理路由**下载（`/dsh-auto-translate/model-v2/...`），宿主端带**断点续传 + 12 次重试**并落盘缓存，避免浏览器直连镜像时的跨域与中断问题。
 - 缓存在浏览器 Cache Storage；宿主缓存位于 `$DSH_HOME/dsh-auto-translate/models`。
 - 想省流量可先只装 en↔zh；其它语向在首次遇到时再下载。
+- **仓库体积**：默认不含 ONNX Runtime 的 wasm（约 74MB）。首次使用时宿主端会从 CDN 取回并缓存到 [[$DSH_HOME/dsh-auto-translate/ort-cache]]；要**完全离线**运行，先执行 [[npm run fetch-vendor]] 把它们落到本地 [[vendor/ort/]]。
 
 ## 故障排查
 

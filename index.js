@@ -78,6 +78,8 @@ const MODEL_UPSTREAM = 'https://hf-mirror.com'
 const ALLOWED_REPOS = new Set([
 	'Xenova/opus-mt-en-zh',
 	'Xenova/opus-mt-zh-en',
+	'Xenova/opus-mt-ja-en',
+	'Xenova/opus-mt-ko-en',
 	'Xenova/nllb-200-distilled-600M',
 ])
 

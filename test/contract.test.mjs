@@ -21,7 +21,7 @@ test('package.json 声明了 DSH 双面插件契约', () => {
   assert.equal(pkg.exports['./client'], './client.js')
   assert.equal(pkg.exports['.'], './index.js')
   // 包内容契约：宿主/客户端/vendor 运行时必须随包；74MB 的 wasm 刻意不随包（首次使用时 CDN 兜底）
-  for (const need of ['index.js', 'client.js', 'cordis.patch.yml', 'vendor/worker.v4.js', 'vendor/transformers.esm.v2.js']) {
+  for (const need of ['index.js', 'client.js', 'cordis.patch.yml', 'vendor/worker.v5.js', 'vendor/transformers.esm.v2.js']) {
     assert.ok(pkg.files.includes(need), 'files 应包含 ' + need)
   }
   assert.ok(!pkg.files.some((f) => f.endsWith('.wasm')), 'wasm 不应随包（CDN 兜底或 npm run fetch-vendor）')
@@ -83,7 +83,7 @@ test('纯函数行为：语言判定 / 分块 / 热键组合 / 错误提示', ()
 
 test('worker 锁定模型 revision 且映射 NLLB 语言码', () => {
   const stub = { location: { origin: 'http://127.0.0.1:3080' }, postMessage() {}, __test: null }
-  const fn = new Function('self', read('vendor/worker.v4.js'))
+  const fn = new Function('self', read('vendor/worker.v5.js'))
   fn(stub)
   const t = stub.__test
   assert.ok(t && t.REVISIONS, 'worker 应暴露 __test.REVISIONS')
@@ -104,7 +104,7 @@ test('宿主半具备必要防护与能力', () => {
 })
 
 test('vendor 资源齐全（JS 与 loader 必须随包提供）', () => {
-  for (const p of ['vendor/worker.v4.js', 'vendor/transformers.esm.v2.js', 'vendor/ort/ort.webgpu.min.mjs']) {
+  for (const p of ['vendor/worker.v5.js', 'vendor/transformers.esm.v2.js', 'vendor/ort/ort.webgpu.min.mjs']) {
     const size = readFileSync(join(ROOT, p)).length
     assert.ok(size > 1000, p + ' 应存在且非空')
   }

@@ -39,6 +39,8 @@ window.__ModuleLoader__.load({
 			minChars: 2,
 			maxNodes: 60,
 			cacheLimit: 4000,
+			workerMode: 'auto',      // auto(优先 SharedWorker) | shared | dedicated
+			multiMode: 'two-hop',    // 多语种策略：two-hop(便宜快) | nllb(质量好, fp32 约 5GB)
 			translateCode: false,    // 是否连 <pre>/<code>（思考过程常在这里）一起翻译
 			chipCompact: true,       // 默认缩成小圆点，避免遮挡其他按钮
 			chipHidden: false,       // Ctrl+Shift+H 可整只隐藏
@@ -382,7 +384,7 @@ window.__ModuleLoader__.load({
 		var onDeviceFailures = 0, onDeviceDisabled = false;
 		// ===== 本机离线引擎（浏览器内 WASM，推理在 vendor/worker.js） =====
 		var localWorker = null, localPending = new Map(), localSeq = 1, localWarm = false, localProgress = null;
-		var localWarming = false, workerRecoveries = 0, storageInfo = '', progressHideTimer = null;
+		var localWarming = false, workerRecoveries = 0, storageInfo = '', progressHideTimer = null, sharedFailures = 0;
 		var localLatencySum = 0, localLatencyCount = 0;   // 本机引擎平均耗时（给用户预期）
 		var loadedPairs = {};   // { 'en-zh': true, 'nllb': true }
 		var warmingPair = null;
@@ -391,7 +393,17 @@ window.__ModuleLoader__.load({
 
 		/** 把出错的 worker 丢掉，下次调用会重建（fp32 建会话可能 OOM/崩溃，必须能自愈） */
 		function resetWorker(reason) {
-			try { if (localWorker) localWorker.terminate(); } catch (e) { }
+			if (localWorker) {
+				try { localWorker.terminate(); } catch (e) { }   // 共享模式=发 reset，独立模式=硬杀
+				if (localWorker.shared) {
+					sharedFailures++;
+					if (sharedFailures >= 2 && settings.workerMode !== 'dedicated') {
+						settings.workerMode = 'dedicated';
+						saveSettings();
+						console.warn('[dsh-auto-translate] SharedWorker 连续失败，回退为独立 worker');
+					}
+				}
+			}
 			localWorker = null;
 			localWarm = false;
 			localWarming = false;
@@ -437,7 +449,7 @@ window.__ModuleLoader__.load({
 
 		function ensureLocalWorker() {
 			if (localWorker) return localWorker;
-			var workerUrl = '/dsh-auto-translate/vendor/worker.v4.js';
+			var workerUrl = '/dsh-auto-translate/vendor/worker.v5.js';
 			// 预检：把「404 / 类型不对」这类失败变成可读信息（模块 worker 失败时浏览器只报 unknown）
 			try {
 				var xhr = new XMLHttpRequest();
@@ -449,7 +461,35 @@ window.__ModuleLoader__.load({
 			} catch (e) {
 				throw new Error('本地 worker 不可用(' + ((e && e.message) || e) + ') ' + workerUrl);
 			}
-			localWorker = new Worker(workerUrl, { type: 'module' });
+			// 默认用 SharedWorker：同源多个标签页共用一份 WASM 会话（内存不翻倍）
+			var handle = { shared: false, onmessage: null, onerror: null, post: null, terminate: null };
+			if (settings.workerMode !== 'dedicated' && typeof SharedWorker === 'function') {
+				try {
+					var sw = new SharedWorker(workerUrl, { name: 'dsh-auto-translate', type: 'module' });
+					var port = sw.port;
+					port.onmessage = function (ev) { if (handle.onmessage) handle.onmessage(ev); };
+					try { port.onerror = function (ev) { if (handle.onerror) handle.onerror(ev); } } catch (e) { }
+					try { port.start(); } catch (e) { }
+					handle.shared = true;
+					handle.post = function (m) { try { port.postMessage(m) } catch (e) { } };
+					handle.terminate = function () { try { port.postMessage({ type: 'reset' }) } catch (e) { } };   // 共享模式只能 reset
+					localWorker = handle;
+					handle.post({ type: 'config', multiMode: settings.multiMode });
+				} catch (e) {
+					console.warn('[dsh-auto-translate] SharedWorker 不可用，改用独立 worker: ' + ((e && e.message) || e));
+					localWorker = null;
+				}
+			}
+			if (!localWorker) {
+				var w0 = new Worker(workerUrl, { type: 'module' });
+				w0.onmessage = function (ev) { if (handle.onmessage) handle.onmessage(ev); };
+				w0.onerror = function (ev) { if (handle.onerror) handle.onerror(ev); };
+				handle.shared = false;
+				handle.post = function (m) { try { w0.postMessage(m) } catch (e) { } };
+				handle.terminate = function () { try { w0.terminate() } catch (e) { } };
+				localWorker = handle;
+				handle.post({ type: 'config', multiMode: settings.multiMode });
+			}
 			localWorker.onmessage = function (ev) {
 				var m = ev.data || {};
 				if (m.type === 'boot') { localBooted = true; updateStatus(); return; }
@@ -509,7 +549,7 @@ window.__ModuleLoader__.load({
 					resolve: function (v) { clearInterval(timer); origResolve(v); },
 					reject: function (e) { clearInterval(timer); origReject(e); },
 				});
-				w.postMessage({ id: id, type: 'translate', text: text, src: src, tgt: tgt });
+				w.post({ id: id, type: 'translate', text: text, src: src, tgt: tgt });
 			});
 		}
 		/** 失败一次就重建 worker 并重试一次（模型已在缓存里，重建代价很小） */
@@ -581,7 +621,7 @@ window.__ModuleLoader__.load({
 					reject: function (e) { warmingPair = null; lastError = '语向预热失败(' + src + '→' + tgt + '): ' + ((e && e.message) || e); updateStatus(); },
 				});
 				if (statusEl) statusEl.textContent = '正在预热 ' + src + '→' + tgt + '（首次需下载对应模型）…';
-				w.postMessage({ id: id, type: 'warm', src: src, tgt: tgt, text: PAIR_SAMPLES[src] || 'Hello.' });
+				w.post({ id: id, type: 'warm', src: src, tgt: tgt, text: PAIR_SAMPLES[src] || 'Hello.' });
 			} catch (e) { warmingPair = null; lastError = '本地 worker 启动失败: ' + ((e && e.message) || e); updateStatus(); }
 		}
 		function cancelWarm() {
@@ -605,7 +645,7 @@ window.__ModuleLoader__.load({
 					reject: function (e) { localWarming = false; lastError = '本地模型下载失败: ' + ((e && e.message) || e); updateStatus(); }
 				});
 				if (statusEl) statusEl.textContent = '正在下载/初始化本地模型（首次约 425MB，之后离线）…';
-				w.postMessage({ id: id, type: 'warm', src: src, tgt: tgt });
+				w.post({ id: id, type: 'warm', src: src, tgt: tgt });
 			} catch (e) { localWarming = false; lastError = '本地 worker 启动失败: ' + ((e && e.message) || e); updateStatus(); }
 		}
 		var lastError = '';
@@ -841,6 +881,7 @@ window.__ModuleLoader__.load({
 				chipLabel: '译', cacheLabel: '宿主缓存', clearHostCache: '清空宿主缓存', cacheCleared: '宿主缓存已清空',
 				translateCode: '也翻译代码/思考块(实验)', avgLatency: '平均 {ms}ms/句',
 				multiTab: '检测到 {n} 个其他标签页(译文缓存共享,内存会翻倍)',
+				workerMode: '推理实例', wmAuto: '自动(共享优先)', multiMode: '多语种策略', mmTwoHop: '两跳(省内存/快)',
 				title: '自动翻译（零 token）', close: '收起', enabled: '启用', target: '目标语言',
 				hoverDelay: '悬停切换(ms)', engine: '引擎', onlineOrder: '在线优先', customTemplate: '自定义模板',
 				latinSource: '拉丁源语言', initOnDevice: '初始化端侧引擎', warmBtn: '预热',
@@ -874,6 +915,7 @@ window.__ModuleLoader__.load({
 				chipLabel: 'Tr', cacheLabel: 'host cache', clearHostCache: 'Clear host cache', cacheCleared: 'Host cache cleared',
 				translateCode: 'Also translate code/thinking blocks (experimental)', avgLatency: 'avg {ms}ms/sentence',
 				multiTab: '{n} other tab(s) detected (translation cache shared, memory doubles)',
+				workerMode: 'Inference instance', wmAuto: 'Auto (prefer shared)', multiMode: 'Multilingual strategy', mmTwoHop: 'Two-hop (light/fast)',
 				title: 'Auto-translate (zero token)', close: 'Collapse', enabled: 'Enabled', target: 'Target language',
 				hoverDelay: 'Hover toggle (ms)', engine: 'Engine', onlineOrder: 'Online priority', customTemplate: 'Custom template',
 				latinSource: 'Latin source', initOnDevice: 'Init built-in engine', warmBtn: 'Warm up',
@@ -1063,6 +1105,8 @@ window.__ModuleLoader__.load({
 				+ '<div class="row"><label data-i18n="selfCheck"></label><button data-act="test" data-i18n="test"></button><button data-act="diag" data-i18n="diag"></button></div>'
 				+ '<div class="row"><label data-i18n="ondevUnavailable"></label><button data-act="useonline" data-i18n="useOnline"></button></div>'
 				+ '<div class="row"><label data-i18n="localModel"></label><button data-act="warmlocal" data-i18n="warmLocal"></button><button data-act="uselocal" data-i18n="useLocal"></button></div>'
+				+ '<div class="row"><label data-i18n="workerMode"></label><select data-set="workerMode"><option value="auto" data-i18n="wmAuto"></option><option value="shared">SharedWorker</option><option value="dedicated">Worker</option></select></div>'
+				+ '<div class="row"><label data-i18n="multiMode"></label><select data-set="multiMode"><option value="two-hop" data-i18n="mmTwoHop"></option><option value="nllb">NLLB 600M</option></select></div>'
 				+ '<div class="row"><label data-i18n="singlePair"></label><select data-el="pairSel"><option value="en>zh">en → zh</option><option value="zh>en">zh → en</option><option value="ja>zh">ja → zh (NLLB)</option><option value="ko>zh">ko → zh (NLLB)</option></select><button data-act="warmPair" data-i18n="warmPair"></button></div>'
 				+ '<div class="row"><label data-i18n="abort"></label><button data-act="cancelWarm" data-i18n="cancelWarm"></button></div>'
 				+ '<div class="row"><label data-i18n="compactChip"></label><input type="checkbox" data-set="chipCompact"></div>'
@@ -1204,6 +1248,8 @@ window.__ModuleLoader__.load({
 				if (key === 'lang') applyI18n();
 				applySettingsToUI();
 				if (key === 'enabled') { if (!settings.enabled) restoreAll(); else scanRoot(document.body, 0); }
+				if (key === 'workerMode') { resetWorker('mode-change'); }
+				if (key === 'multiMode' && localWorker && localWorker.post) { localWorker.post({ type: 'config', multiMode: settings.multiMode }); }
 				if (key === 'engine' || key === 'target' || key === 'latinSource') { records = []; recordByNode = new WeakMap(); processed = new WeakSet(); translatedCount = 0; scanRoot(document.body, 0); }
 			});
 			applyI18n();

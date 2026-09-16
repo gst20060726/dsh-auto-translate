@@ -19,7 +19,7 @@
     "LICENSE",
     "DEV-STATE.md",
     "scripts",
-    "vendor/worker.v4.js",
+    "vendor/worker.v5.js",
     "vendor/transformers.esm.v2.js",
     "vendor/ort/*.mjs"
   ],

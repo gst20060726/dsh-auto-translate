@@ -356,7 +356,7 @@ window.__ModuleLoader__.load({
 			try {
 				fetch('/dsh-auto-translate/cache-info').then(function (r) { return r.json(); }).then(function (j) {
 					if (j && j.ok) {
-						hostCacheInfo = '宿主缓存 ' + (j.totalBytes / 1073741824).toFixed(2) + 'GB';
+						hostCacheInfo = t('cacheLabel') + ' ' + (j.totalBytes / 1073741824).toFixed(2) + 'GB' + (j.capBytes ? '/' + (j.capBytes / 1073741824).toFixed(0) + 'GB' : '');
 						updateStatus();
 					}
 				}).catch(function () { });
@@ -761,7 +761,7 @@ window.__ModuleLoader__.load({
 		// ===================== 面板国际化（zh / en，auto 跟随浏览器） =====================
 		var I18N = {
 			zh: {
-				chipLabel: '译',
+				chipLabel: '译', cacheLabel: '宿主缓存', clearHostCache: '清空宿主缓存', cacheCleared: '宿主缓存已清空',
 				title: '自动翻译（零 token）', close: '收起', enabled: '启用', target: '目标语言',
 				hoverDelay: '悬停切换(ms)', engine: '引擎', onlineOrder: '在线优先', customTemplate: '自定义模板',
 				latinSource: '拉丁源语言', initOnDevice: '初始化端侧引擎', warmBtn: '预热',
@@ -792,7 +792,7 @@ window.__ModuleLoader__.load({
 				help: '【自动翻译 · 使用指南】\n\n· 自动工作:页面上的外语文本就地替换为目标语言\n· 悬停约 0.6 秒:在「译文 ↔ 原文」之间来回切换\n· Alt + 悬停:立即切换\n· Ctrl+Alt+T:呼出/关闭本面板(圆点找不到时用这个)\n· Ctrl+Alt+H:显示/隐藏左下角圆点\n· Ctrl+Alt+P:暂停 / 恢复翻译\n\n【引擎】\n· 本机离线(推荐):浏览器内 WASM 推理,零 token、不限量、文本不出本机\n· 在线免密钥:MyMemory,免 key 但有每日额度限制\n· 端侧:浏览器内置 Translator(需能连 Google 组件服务器)\n· 自定义端点:填你自己的翻译服务模板\n\n【本地模型】\n· en↔zh:opus-mt 专用小模型(约 425MB,用 fp32)\n· ja/ko 等:需 NLLB 600M(约 600MB,按需下载)\n· 模型缓存在浏览器,之后完全离线;出错点「保存诊断到本机」',
 			},
 			en: {
-				chipLabel: 'Tr',
+				chipLabel: 'Tr', cacheLabel: 'host cache', clearHostCache: 'Clear host cache', cacheCleared: 'Host cache cleared',
 				title: 'Auto-translate (zero token)', close: 'Collapse', enabled: 'Enabled', target: 'Target language',
 				hoverDelay: 'Hover toggle (ms)', engine: 'Engine', onlineOrder: 'Online priority', customTemplate: 'Custom template',
 				latinSource: 'Latin source', initOnDevice: 'Init built-in engine', warmBtn: 'Warm up',
@@ -984,6 +984,7 @@ window.__ModuleLoader__.load({
 				+ '<div class="row"><label data-i18n="singlePair"></label><select data-el="pairSel"><option value="en>zh">en → zh</option><option value="zh>en">zh → en</option><option value="ja>zh">ja → zh (NLLB)</option><option value="ko>zh">ko → zh (NLLB)</option></select><button data-act="warmPair" data-i18n="warmPair"></button></div>'
 				+ '<div class="row"><label data-i18n="abort"></label><button data-act="cancelWarm" data-i18n="cancelWarm"></button></div>'
 				+ '<div class="row"><label data-i18n="compactChip"></label><input type="checkbox" data-set="chipCompact"></div>'
+				+ '<div class="row"><button data-act="clearHostCache" data-i18n="clearHostCache"></button></div>'
 				+ '<div class="row"><button data-act="resetpos" data-i18n="resetPos"></button><button data-act="hide" data-i18n="hideChip"></button><button data-act="clearcache" data-i18n="clearCache"></button></div>'
 				+ '<div class="row"><button data-act="rescan" data-i18n="rescan"></button><button data-act="restore" data-i18n="restore"></button></div>'
 				+ '<div class="hint" data-el="status"></div>'
@@ -1079,6 +1080,13 @@ window.__ModuleLoader__.load({
 					warmPair(parts[0], parts[1]);
 				}
 				else if (act === 'cancelWarm') cancelWarm();
+				else if (act === 'clearHostCache') {
+					fetch('/dsh-auto-translate/cache-clear', { method: 'POST' }).then(function () {
+						hostCacheInfo = '';
+						if (statusEl) statusEl.textContent = t('cacheCleared');
+						refreshHostCacheInfo();
+					}).catch(function () { });
+				}
 				else if (act === 'summon') summonPanel();
 				else if (act === 'rebindSummon') { rebinding = 'hotkeySummon'; if (statusEl) statusEl.textContent = '请按下新的「呼出面板」组合键…（Esc 取消）'; }
 				else if (act === 'rebindHide') { rebinding = 'hotkeyHide'; if (statusEl) statusEl.textContent = '请按下新的「显示/隐藏圆点」组合键…（Esc 取消）'; }

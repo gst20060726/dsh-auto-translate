@@ -9,7 +9,7 @@
  * 不产生 token 消耗；模型文件由浏览器直接从 hf-mirror.com 拉取并缓存，
  * 服务器不代理、不落盘。
  */
-import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createReadStream, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { once } from 'node:events'
 import { homedir } from 'node:os'
 import { dirname, extname, join, normalize, sep } from 'node:path'
@@ -27,6 +27,7 @@ const ROUTE_PREFIX = '/dsh-auto-translate/vendor'
 const MODEL_PREFIX = '/dsh-auto-translate/model-v2'
 const DIAG_PATH = '/dsh-auto-translate/diag'
 const CACHE_INFO_PATH = '/dsh-auto-translate/cache-info'
+const CACHE_CLEAR_PATH = '/dsh-auto-translate/cache-clear'
 const DIAG_DIR = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'dsh-auto-translate')
 // 模型磁盘缓存：一次下好（带断点续传与重试），之后从本地磁盘直接发，避免流式转发时上游卡死
 const MODEL_CACHE_DIR = join(DIAG_DIR, 'models')
@@ -40,6 +41,36 @@ const ORT_CACHE_DIR = join(DIAG_DIR, 'ort-cache')
  * 这样 worker 锁定的 sha 变化时（升级模型/回滚版本），本地已下载的权重仍然复用，
  * 不会因为 URL 变了就白下几百 MB。
  */
+// 宿主缓存容量上限：超过就按「最久未使用」裁剪，避免磁盘被模型悄悄吃掉
+const CACHE_CAP_BYTES = 6 * 1024 * 1024 * 1024
+
+function collectCacheFiles(dir, out) {
+	try {
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const p = join(dir, entry.name)
+			if (entry.isDirectory()) collectCacheFiles(p, out)
+			else if (entry.isFile()) { try { const st = statSync(p); out.push({ p, size: st.size, mtime: st.mtimeMs }) } catch { /* skip */ } }
+		}
+	} catch { /* missing dir */ }
+	return out
+}
+
+function pruneCache(capBytes) {
+	try {
+		const files = collectCacheFiles(MODEL_CACHE_DIR, [])
+		let total = files.reduce((a, f) => a + f.size, 0)
+		if (total <= capBytes) return 0
+		files.sort((a, b) => a.mtime - b.mtime)
+		let removed = 0
+		for (const f of files) {
+			if (total <= capBytes) break
+			try { rmSync(f.p, { force: true }); total -= f.size; removed++ } catch { /* skip */ }
+		}
+		console.log('[dsh-auto-translate] cache pruned: removed ' + removed + ' files, now ' + Math.round(total / 1048576) + 'MB')
+		return removed
+	} catch { return 0 }
+}
+
 function cacheRelOf(rel) {
 	return rel.replace(/\/resolve\/[^/]+\//, '/resolve/_rev/')
 }
@@ -74,6 +105,7 @@ function serveCacheInfo(req, res) {
 			modelsBytes: models,
 			ortBytes: ort,
 			totalBytes: models + ort,
+			capBytes: CACHE_CAP_BYTES,
 			modelsDir: MODEL_CACHE_DIR,
 			ortDir: ORT_CACHE_DIR,
 		}))
@@ -135,6 +167,7 @@ async function downloadToCache(rel) {
 			await once(ws, 'finish')
 			renameSync(tmp, dest)
 			console.log('[dsh-auto-translate] cached ' + rel + ' (' + Math.round(offset / 1048576) + ' MB, attempt ' + attempt + ')')
+			pruneCache(CACHE_CAP_BYTES)
 			return
 		} catch (err) {
 			console.log('[dsh-auto-translate] download retry ' + attempt + ' for ' + rel + ' @' + Math.round(offset / 1048576) + 'MB — ' + String((err && err.message) || err))
@@ -157,6 +190,8 @@ async function proxyModel(req, res) {
 		const cached = join(MODEL_CACHE_DIR, cacheRelOf(rel))
 		const cachedOk = existsSync(cached) && statSync(cached).size > 0
 		console.log('[dsh-auto-translate] model ' + (cachedOk ? 'HIT ' : 'MISS ') + rel)
+		// 命中即触碰 mtime → 让「最久未使用」裁剪是真实的 LRU
+		if (cachedOk) { try { const now = new Date(); utimesSync(cached, now, now) } catch { /* best effort */ } }
 		if (!cachedOk) await downloadToCache(rel)
 		const size = statSync(cached).size
 		res.writeHead(200, {
@@ -309,6 +344,27 @@ export function apply(ctx) {
 					return
 				}
 				proxyModel(req, res)
+			},
+		})
+		safeRegister({
+			kind: 'exact',
+			path: CACHE_CLEAR_PATH,
+			handler: (req, res) => {
+				const hostName = String(req.headers.host || '').split(':')[0]
+				if (req.method !== 'POST' || !/^(127\.0\.0\.1|localhost|\[::1\]|::1)$/.test(hostName)) {
+					res.writeHead(403, { 'Content-Type': 'text/plain' })
+					res.end('loopback POST only')
+					return
+				}
+				try {
+					rmSync(MODEL_CACHE_DIR, { recursive: true, force: true })
+					rmSync(ORT_CACHE_DIR, { recursive: true, force: true })
+					res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+					res.end(JSON.stringify({ ok: true }))
+				} catch (err) {
+					res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' })
+					res.end(JSON.stringify({ ok: false, error: String((err && err.message) || err) }))
+				}
 			},
 		})
 		safeRegister({

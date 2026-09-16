@@ -43,7 +43,7 @@
 | 方式 | 你要做的 | 别人怎么装 |
 | --- | --- | --- |
 | **本地 tgz（最省事）** | [[npm pack]] 得到 [[dsh-auto-translate-0.2.0.tgz]]（约 236KB），把文件发给对方 | [[dsh plugin --profile web add /对方/路径/dsh-auto-translate-0.2.0.tgz]] |
-| **Gitee 镜像（国内可推）** | 在 gitee 建仓库 → [[git remote add gitee https://gitee.com/<你>/dsh-auto-translate.git]] → [[git push -u gitee main]] | [[dsh plugin --profile web add 'git+https://gitee.com/<你>/dsh-auto-translate.git#<commit>']] |
+| **Gitee 镜像（国内可推，已上线）** | [[git remote add gitee https://gitee.com/nysjn/dsh-auto-translate.git]] → [[git push -u gitee main]] | [[dsh plugin --profile web add 'git+https://gitee.com/nysjn/dsh-auto-translate.git#<commit>']] |
 | **npm（不需要 GitHub）** | [[npm login]] → [[npm publish --access public]] | [[dsh plugin --profile web add dsh-auto-translate]] |
 
 > 三条路都有现成脚本:**[[powershell -File scripts/publish.ps1 -Target tgz|zip|bundle|gitee|github|npm]]**

@@ -60,6 +60,39 @@ try {
   npmSkip = e.status ? `npm view 退出码 ${e.status}` : e.message;
 }
 
+// ---------- 指标：npm 下载量 + Gitee 收藏 ----------
+// 说明：npm / Gitee 都不提供「包页浏览量」；能反映使用量的是 npm 下载量（新包当天无数据，
+// 官方 downloads API 会 404）与 Gitee 的 star/fork/watch。全部走公开接口，无凭据。
+async function getJson(url, timeoutMs = 15000) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, { signal: ac.signal, headers: { 'user-agent': 'dsh-auto-translate-dashboard' } });
+    if (!r.ok) return { error: `HTTP ${r.status}` };
+    return { json: await r.json() };
+  } catch (e) {
+    return { error: e.name === 'AbortError' ? '超时' : e.message };
+  } finally { clearTimeout(timer); }
+}
+
+const dlWeek = await getJson(`https://api.npmjs.org/downloads/point/last-week/${NAME}`);
+const dlMonth = await getJson(`https://api.npmjs.org/downloads/point/last-month/${NAME}`);
+const dlRange = await getJson(`https://api.npmjs.org/downloads/range/last-month/${NAME}`);
+const gitee = await getJson('https://gitee.com/api/v5/repos/nysjn/dsh-auto-translate');
+
+const dlHasData = Boolean(dlWeek.json || dlMonth.json);
+const metrics = {
+  week: dlWeek.json?.downloads ?? null,
+  month: dlMonth.json?.downloads ?? null,
+  days: Array.isArray(dlRange.json?.downloads) ? dlRange.json.downloads : [],
+  dlNote: dlHasData ? '' : `下载统计尚无数据（${dlWeek.error ?? '未返回'}）—— npm 对新发布的包延迟约一天开始计数`,
+  star: gitee.json?.stargazers_count ?? null,
+  fork: gitee.json?.forks_count ?? null,
+  watch: gitee.json?.watchers_count ?? null,
+  issue: gitee.json?.open_issues_count ?? null,
+  giteeNote: gitee.json ? '' : `Gitee 指标查询失败（${gitee.error}）`,
+};
+
 // ---------- 本地 tgz ----------
 let tgz = null;
 try {
@@ -87,11 +120,43 @@ const installCmds = [
 
 const links = [
   ['npm 包页', `https://www.npmjs.com/package/${NAME}`],
+  ['npm 下载趋势图', `https://www.npmjs.com/package/${NAME}?activeTab=explore`],
   ['npm tarball', `https://registry.npmjs.org/${NAME}/-/${NAME}-${VERSION}.tgz`],
   ['Gitee 仓库', REPO],
   ['Gitee 本次提交', `${REPO}/commit/${head}`],
+  ['Gitee 访问/克隆统计', `${REPO}/traffic`],
   ['npm 令牌管理', 'https://www.npmjs.com/settings/nysjn/tokens'],
 ];
+
+// ---- 指标区块 ----
+const fnum = (n) => (n === null || n === undefined ? '—' : Number(n).toLocaleString('zh-CN'));
+const maxDay = metrics.days.reduce((m, d) => Math.max(m, d.downloads || 0), 0);
+const sparkRows = metrics.days.slice(-14).map((d) => {
+  const w = maxDay === 0 ? 0 : Math.round(((d.downloads || 0) / maxDay) * 160);
+  return `<div class="spark"><span class="day">${esc(String(d.day).slice(5))}</span>` +
+         `<span class="bar" style="width:${w}px"></span><span class="num">${fnum(d.downloads)}</span></div>`;
+}).join('');
+
+const metricsSection = `
+  <h2>使用量指标</h2>
+  <div class="grid">
+    <div class="tile"><div class="lbl">npm 近一周下载</div>
+      <div class="val">${fnum(metrics.week)}</div>
+      <div class="note">官方 downloads API</div></div>
+    <div class="tile"><div class="lbl">npm 近一月下载</div>
+      <div class="val">${fnum(metrics.month)}</div>
+      <div class="note">按天累加</div></div>
+    <div class="tile"><div class="lbl">Gitee 收藏 / 派生</div>
+      <div class="val">${fnum(metrics.star)} / ${fnum(metrics.fork)}</div>
+      <div class="note">关注 ${fnum(metrics.watch)} · 开放 issue ${fnum(metrics.issue)}</div></div>
+    <div class="tile"><div class="lbl">包页浏览量</div>
+      <div class="val"><span class="dimval">不提供</span></div>
+      <div class="note">npm 与 Gitee 均无公开 PV 指标</div></div>
+  </div>
+  ${metrics.dlNote ? `<div class="note-lg">⏳ ${esc(metrics.dlNote)}</div>` : ''}
+  ${metrics.giteeNote ? `<div class="note-lg">⚠️ ${esc(metrics.giteeNote)}</div>` : ''}
+  ${sparkRows ? `<div class="sparkbox"><div class="sparktitle">npm 近 14 天每日下载</div>${sparkRows}</div>` : ''}
+`;
 
 const html = `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -135,6 +200,15 @@ const html = `<!DOCTYPE html>
   a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
   .bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:6px 0 0}
   footer{color:var(--dim);font-size:12px;margin-top:34px;border-top:1px solid var(--line);padding-top:15px}
+  .dimval{color:var(--dim)}
+  .note-lg{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--warn);
+           border-radius:8px;padding:10px 14px;margin:10px 0;font-size:13px;color:var(--warn)}
+  .sparkbox{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-top:12px}
+  .sparktitle{font-size:12px;color:var(--dim);margin-bottom:8px}
+  .spark{display:flex;align-items:center;gap:10px;line-height:1.5}
+  .spark .day{width:52px;color:var(--dim);font-size:12px;font-family:ui-monospace,Consolas,monospace}
+  .spark .bar{height:12px;background:var(--acc);border-radius:3px;min-width:1px;opacity:.75}
+  .spark .num{font-size:12px;color:var(--dim)}
 </style>
 </head>
 <body>
@@ -162,6 +236,7 @@ const html = `<!DOCTYPE html>
       <div class="note">${tgz ? 'tgz 已打包 ' + esc(tgz.size) + ' KB' : '尚未打包'}</div></div>
   </div>
 
+  ${metricsSection}
   <h2>别人的安装命令</h2>
   ${installCmds.map(([tag, cmd, hint]) => `
   <div class="cmd"><span class="tag">${esc(tag)}</span>

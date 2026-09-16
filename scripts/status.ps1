@@ -106,6 +106,29 @@ function Get-Status {
     }
   } else { $out.tgz = $null }
 
+  # ---- metrics: npm downloads + gitee stars (public APIs, no credentials) ----
+  $weekTxt = 'n/a'; $monthTxt = 'n/a'; $dlNote = ''
+  try {
+    $w = Invoke-RestMethod "https://api.npmjs.org/downloads/point/last-week/$name" -TimeoutSec 20
+    $weekTxt = '' + $w.downloads
+  } catch { $dlNote = 'npm download stats not available yet (npm delays counting for new packages)' }
+  try {
+    $m = Invoke-RestMethod "https://api.npmjs.org/downloads/point/last-month/$name" -TimeoutSec 20
+    $monthTxt = '' + $m.downloads
+  } catch { }
+  $out.metrics = [ordered]@{
+    week  = $weekTxt
+    month = $monthTxt
+    note  = $dlNote
+  }
+  try {
+    $g = Invoke-RestMethod 'https://gitee.com/api/v5/repos/nysjn/dsh-auto-translate' -TimeoutSec 20
+    $out.metrics.gitee = "stars $($g.stargazers_count) | forks $($g.forks_count) | watch $($g.watchers_count) | open issues $($g.open_issues_count)"
+  } catch {
+    $out.metrics.gitee = "$WARN gitee metrics unavailable"
+  }
+  $out.metrics.views = 'not published by npm or Gitee (repo traffic page is owner-only)'
+
   # ---- profile install state ----
   $listOut = (& dsh plugin --profile web list 2>$null | Out-String)
   $installed = ($listOut -match [regex]::Escape($name))
@@ -154,6 +177,16 @@ function Render($s) {
   } else {
     Row 'state' "query failed: $($s.npm.err)" 'Red'
     Row 'pkg page' $s.npm.url 'DarkCyan'
+  }
+
+  Section 'USAGE METRICS'
+  Row 'dl / week' $s.metrics.week $(if ($s.metrics.week -eq 'n/a') { 'Yellow' } else { 'Green' })
+  Row 'dl / month' $s.metrics.month $(if ($s.metrics.month -eq 'n/a') { 'Yellow' } else { 'Green' })
+  Row 'gitee' $s.metrics.gitee
+  Row 'views' $s.metrics.views 'DarkGray'
+  if ($s.metrics.note) {
+    Write-Host '  ! ' -NoNewline -ForegroundColor Yellow
+    Write-Host $s.metrics.note -ForegroundColor Yellow
   }
 
   Section 'LOCAL ARTIFACT / INSTALL STATE'

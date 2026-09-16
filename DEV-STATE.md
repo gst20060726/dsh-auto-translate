@@ -30,9 +30,22 @@
 - 桌面快捷方式：**`dsh-translate 状态面板`**（交互式控制台，`-NoExit` 所以不会闪退）与
   **`dsh-translate 仪表盘`**（先刷新快照再用 Edge/Chrome 应用模式打开 `dashboard.html`）。
   快捷方式指向 `scripts/status.ps1` 与 `scripts/open-dashboard.vbs`，重建方式见本节末尾。
+  桌面上还直接放了一份 `dsh-translate 仪表盘.html`（双击即开，不依赖快捷方式）。
+
+## 使用量指标（能看什么、看不到什么）
+
+- **能看**：npm 下载量（官方 `api.npmjs.org/downloads`，面板显示周/月，仪表盘另有近 14 天柱状图）；
+  Gitee 的 star / fork / watch / open issue（`gitee.com/api/v5/repos/...`）。两者都是公开接口、无需凭据。
+- **看不到**：**包页浏览量 / PV**——npm 与 Gitee 都不对外提供该维度的统计（npm 无任何包级浏览接口，
+  探测 `/package/<name>/stats` 与 `/downloads` 之外的端点全 404）；Gitee 的访问/克隆统计**只有仓库拥有者
+  登录后可见**（`/traffic` 与 API 的 traffic 端点对外均 404），所以只放直达链接由你自己看。
+- **新包延迟**：npm 对刚发布的包**当天没有下载数据**（downloads API 返回 404，对照 `jsdom` 正常），
+  通常第二天开始计数。面板会显示 `n/a` 并给出 Yellow 提示，不是故障。
+- 结构上无法统计「有多少人本地 link/tgz 安装了插件」——没有回传通道。
+
 - 控制台面板：
 
-      powershell -ExecutionPolicy Bypass -File scripts/status.ps1            # 一屏：本地仓库 / Gitee / npm / 安装态
+      powershell -ExecutionPolicy Bypass -File scripts/status.ps1            # 一屏：本地仓库 / Gitee / npm / 指标 / 安装态
       powershell -ExecutionPolicy Bypass -File scripts/status.ps1 -Open      # 同时打开 npm 与 Gitee 页面
       powershell -ExecutionPolicy Bypass -File scripts/status.ps1 -Watch 30  # 每 30 秒自动刷新
 

@@ -27,7 +27,7 @@
 ## 常用命令
 
     cd C:\Users\20549\.dsh\plugins\dsh-auto-translate
-    npm test              # 9 项离线测试：契约 + i18n + jsdom E2E
+    npm test              # 11 项离线测试：契约 + i18n + jsdom E2E
     npm run fetch-vendor  # 重建 vendor/（换机器或要完全离线时）
     powershell -File scripts/publish.ps1 -Target slimzip   # 生成给 Gitee 网页上传的包
     git push gitee main

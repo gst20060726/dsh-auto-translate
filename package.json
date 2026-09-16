@@ -48,11 +48,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/CHANGE_ME/dsh-auto-translate.git"
+    "url": "git+https://gitee.com/nysjn/dsh-auto-translate.git"
   },
-  "homepage": "https://github.com/CHANGE_ME/dsh-auto-translate#readme",
+  "homepage": "https://gitee.com/nysjn/dsh-auto-translate#readme",
   "bugs": {
-    "url": "https://github.com/CHANGE_ME/dsh-auto-translate/issues"
+    "url": "https://gitee.com/nysjn/dsh-auto-translate/issues"
   },
   "engines": {
     "node": ">=20"

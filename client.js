@@ -325,7 +325,7 @@ window.__ModuleLoader__.load({
 		var onDeviceFailures = 0, onDeviceDisabled = false;
 		// ===== 本机离线引擎（浏览器内 WASM，推理在 vendor/worker.js） =====
 		var localWorker = null, localPending = new Map(), localSeq = 1, localWarm = false, localProgress = null;
-		var localWarming = false, workerRecoveries = 0, storageInfo = '';
+		var localWarming = false, workerRecoveries = 0, storageInfo = '', progressHideTimer = null;
 		var loadedPairs = {};   // { 'en-zh': true, 'nllb': true }
 		var warmingPair = null;
 		var QUEUE_MAX = 3000;      // 队列上限：超大页面时不再无节制入队
@@ -893,12 +893,21 @@ window.__ModuleLoader__.load({
 			var pfillEl = cardEl && cardEl.querySelector('[data-el="pfill"]');
 			if (pbarEl && pfillEl) {
 				if (localProgress) {
+					if (progressHideTimer) { clearTimeout(progressHideTimer); progressHideTimer = null; }
 					pbarEl.classList.add('on');
 					pfillEl.style.width = (localProgress.progress ? Math.max(2, Math.min(100, Math.round(localProgress.progress))) : 3) + '%';
 				} else if (localWarm) {
-					pbarEl.classList.add('on');
+					// 完成：先显示 100% 约 1.5 秒，然后撤掉进度条（避免"到底下没下完"的困惑）
 					pfillEl.style.width = '100%';
+					if (!progressHideTimer) {
+						progressHideTimer = setTimeout(function () {
+							progressHideTimer = null;
+							if (pbarEl) pbarEl.classList.remove('on');
+							if (pfillEl) pfillEl.style.width = '0';
+						}, 1500);
+					}
 				} else {
+					if (progressHideTimer) { clearTimeout(progressHideTimer); progressHideTimer = null; }
 					pbarEl.classList.remove('on');
 					pfillEl.style.width = '0';
 				}
@@ -931,7 +940,16 @@ window.__ModuleLoader__.load({
 				+ '.hint{opacity:.65;font-size:11px;margin-top:6px}'
 				+ '.pbar{display:none;height:6px;background:#2a2f3a;border-radius:3px;overflow:hidden;margin:6px 0}.pbar.on{display:block}'
 				+ '.pfill{height:100%;width:0;background:#3ddc84;transition:width .2s ease}'
-				+ '.errbox{display:none;width:100%;box-sizing:border-box;max-height:96px;overflow:auto;white-space:pre-wrap;word-break:break-all;background:#111318;color:#ffd9a0;border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:6px;font:11px/1.45 ui-monospace,Consolas,monospace;margin:6px 0;resize:vertical}';
+				+ '.errbox{display:none;width:100%;box-sizing:border-box;max-height:96px;overflow:auto;white-space:pre-wrap;word-break:break-all;background:#111318;color:#ffd9a0;border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:6px;font:11px/1.45 ui-monospace,Consolas,monospace;margin:6px 0;resize:vertical}'
+				// 滚动条：细、圆角、透明轨道、拇指内缩 —— 与面板的深色圆角融为一体
+				+ '::-webkit-scrollbar{width:10px;height:10px}'
+				+ '::-webkit-scrollbar-track{background:transparent}'
+				+ '::-webkit-scrollbar-thumb{background-color:rgba(255,255,255,.16);border-radius:999px;border:3px solid transparent;background-clip:content-box}'
+				+ '::-webkit-scrollbar-thumb:hover{background-color:rgba(255,255,255,.32)}'
+				+ '::-webkit-scrollbar-corner{background:transparent}'
+				+ '.card{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.22) transparent;scrollbar-gutter:stable}'
+				+ '.help{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.22) transparent}'
+				+ '.errbox{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.22) transparent}';
 			sr.appendChild(style);
 			cardEl = document.createElement('div');
 			cardEl.className = 'card';

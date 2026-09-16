@@ -3,6 +3,7 @@ node_modules/
 *.part
 models/
 diagnose-*.json
+*.tgz
 .DS_Store
 # ORT 运行时体积大：不入库，用 npm run fetch-vendor 或宿主端 CDN 兜底
 vendor/ort/*.wasm

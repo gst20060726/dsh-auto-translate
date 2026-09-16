@@ -17,8 +17,11 @@
     "README.en.md",
     "CHANGELOG.md",
     "LICENSE",
-    "vendor",
-    "scripts"
+    "DEV-STATE.md",
+    "scripts",
+    "vendor/worker.v4.js",
+    "vendor/transformers.esm.v2.js",
+    "vendor/ort/*.mjs"
   ],
   "dsh": {
     "bundle": {

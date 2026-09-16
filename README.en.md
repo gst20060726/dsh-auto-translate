@@ -24,6 +24,17 @@ MIT · DeepSeek Harness `0.1.5-rc.1`+ · Chrome/Edge 116+
 
 Restart `dsh web` and refresh the browser. A translucent chip labelled 译 appears at the bottom-left.
 
+### No GitHub? Three verified ways to distribute
+
+| Way | You do | Others run |
+| --- | --- | --- |
+| **Local tarball** | [[npm pack]] (236KB tgz) and send the file | [[dsh plugin --profile web add /path/to/dsh-auto-translate-0.2.0.tgz]] |
+| **Gitee mirror** | create a repo on gitee, then [[git remote add gitee <url>]] and [[git push -u gitee main]] | [[dsh plugin --profile web add 'git+https://gitee.com/<you>/dsh-auto-translate.git#<commit>']] |
+| **npm** (no GitHub needed) | [[npm login]] then [[npm publish --access public]] | [[dsh plugin --profile web add dsh-auto-translate]] |
+
+Marketplace auto-listing still needs a GitHub repo tagged [[dsh-plugin]]; without it the three ways above work identically.
+The package ships **without** the 74MB ORT wasm (fetched from CDN on first use); run [[npm run fetch-vendor]] before packing for a fully offline install.
+
 ## Usage
 
 | Action | Effect |

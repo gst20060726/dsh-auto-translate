@@ -84,6 +84,33 @@ window.__ModuleLoader__.load({
 		} catch (e) { }
 		var cacheDirty = false;
 		function cacheGet(key) { return cache.get(key); }
+		// ===== 跨标签页协作：共享译文缓存，避免同一句话在多个标签里各翻一遍 =====
+		var bc = null, bcPeers = 0, bcBroadcastTimer = null;
+		try { bc = new BroadcastChannel('dsh-auto-translate'); } catch (e) { bc = null; }
+		if (bc) {
+			bc.onmessage = function (ev) {
+				var m = ev.data || {};
+				if (m.type === 'hello') { bcPeers++; updateStatus(); try { bc.postMessage({ type: 'here' }) } catch (e) { } return; }
+				if (m.type === 'here') { bcPeers++; updateStatus(); return; }
+				if (m.type === 'cache-batch' && m.entries) {
+					for (var k in m.entries) { if (!cache.has(k)) { cache.set(k, m.entries[k]); cacheDirty = true; } }
+					return;
+				}
+			};
+			try { bc.postMessage({ type: 'hello' }) } catch (e) { }
+		}
+		function broadcastCache() {
+			if (!bc || bcBroadcastTimer) return;
+			bcBroadcastTimer = setTimeout(function () {
+				bcBroadcastTimer = null;
+				try {
+					var entries = {};
+					var n = 0;
+					cache.forEach(function (v, k) { if (n++ < 200) entries[k] = v; });
+					if (n) bc.postMessage({ type: 'cache-batch', entries: entries });
+				} catch (e) { }
+			}, 2000);
+		}
 		function cacheSet(key, value) {
 			if (cache.size >= settings.cacheLimit) {
 				var oldest = cache.keys().next().value;
@@ -91,6 +118,7 @@ window.__ModuleLoader__.load({
 			}
 			cache.set(key, value);
 			cacheDirty = true;
+			broadcastCache();
 		}
 		function cacheFlush() {
 			if (!cacheDirty) return;
@@ -812,6 +840,7 @@ window.__ModuleLoader__.load({
 			zh: {
 				chipLabel: '译', cacheLabel: '宿主缓存', clearHostCache: '清空宿主缓存', cacheCleared: '宿主缓存已清空',
 				translateCode: '也翻译代码/思考块(实验)', avgLatency: '平均 {ms}ms/句',
+				multiTab: '检测到 {n} 个其他标签页(译文缓存共享,内存会翻倍)',
 				title: '自动翻译（零 token）', close: '收起', enabled: '启用', target: '目标语言',
 				hoverDelay: '悬停切换(ms)', engine: '引擎', onlineOrder: '在线优先', customTemplate: '自定义模板',
 				latinSource: '拉丁源语言', initOnDevice: '初始化端侧引擎', warmBtn: '预热',
@@ -844,6 +873,7 @@ window.__ModuleLoader__.load({
 			en: {
 				chipLabel: 'Tr', cacheLabel: 'host cache', clearHostCache: 'Clear host cache', cacheCleared: 'Host cache cleared',
 				translateCode: 'Also translate code/thinking blocks (experimental)', avgLatency: 'avg {ms}ms/sentence',
+				multiTab: '{n} other tab(s) detected (translation cache shared, memory doubles)',
 				title: 'Auto-translate (zero token)', close: 'Collapse', enabled: 'Enabled', target: 'Target language',
 				hoverDelay: 'Hover toggle (ms)', engine: 'Engine', onlineOrder: 'Online priority', customTemplate: 'Custom template',
 				latinSource: 'Latin source', initOnDevice: 'Init built-in engine', warmBtn: 'Warm up',
@@ -935,6 +965,7 @@ window.__ModuleLoader__.load({
 			if (paired.length && statusEl) statusEl.textContent += t('stLoaded') + paired.join(',');
 			if (warmingPair && statusEl) statusEl.textContent += t('stWarming') + warmingPair;
 			if (hostCacheInfo && statusEl) statusEl.textContent += ' | ' + hostCacheInfo;
+			if (bcPeers > 0 && statusEl) statusEl.textContent += ' | ' + t('multiTab').replace('{n}', bcPeers);
 			var errBoxEl = cardEl && cardEl.querySelector('[data-el="errbox"]');
 			if (errBoxEl) {
 				if (lastError) { errBoxEl.value = String(lastError); errBoxEl.style.display = 'block'; }

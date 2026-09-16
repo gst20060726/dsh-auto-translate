@@ -55,7 +55,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/contract.test.mjs test/i18n.test.mjs",
+    "test": "node --test test/contract.test.mjs test/i18n.test.mjs test/e2e.dom.test.mjs",
     "fetch-vendor": "node scripts/fetch-vendor.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^30.0.1"
   }
 }

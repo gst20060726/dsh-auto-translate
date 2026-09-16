@@ -38,8 +38,9 @@ function loadClient() {
     location: { origin: 'http://127.0.0.1:3080' },
   }
   // 屏蔽模块级副作用（定时器），其余逻辑原样加载
-  const fn = new Function('window', 'self', 'setInterval', 'clearInterval', 'setTimeout', read('client.js'))
-  fn(win, win, noop, noop, noop)
+  // 显式屏蔽 BroadcastChannel：Node 有同名全局，模块级创建会挂住事件循环、测试不退出
+  const fn = new Function('window', 'self', 'setInterval', 'clearInterval', 'setTimeout', 'BroadcastChannel', read('client.js'))
+  fn(win, win, noop, noop, noop, undefined)
   assert.ok(captured, '必须调用 window.__ModuleLoader__.load()')
   const mod = captured.factory((spec) => { throw new Error('unexpected require: ' + spec) })
   return { captured, mod }

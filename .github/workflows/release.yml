@@ -25,7 +25,10 @@ jobs:
           node --check vendor/worker.v4.js
           node -e "const p=require('./package.json');if(!p.dsh||!p.dsh.bundle||!p.dsh.client){throw new Error('missing dsh manifest')};console.log('manifest ok:',p.name,p.version)"
 
-      - name: Offline tests (contract + i18n completeness)
+      - name: Install dev dependencies (jsdom for the DOM E2E)
+        run: npm install --no-audit --no-fund
+
+      - name: Offline tests (contract + i18n completeness + DOM E2E)
         run: npm test
 
       - name: Package dry-run

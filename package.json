@@ -55,7 +55,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/contract.test.mjs",
+    "test": "node --test test/contract.test.mjs test/i18n.test.mjs",
     "fetch-vendor": "node scripts/fetch-vendor.mjs"
   }
 }

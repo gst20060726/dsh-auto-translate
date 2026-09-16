@@ -139,7 +139,13 @@ self.onmessage = async (ev) => {
   const id = msg.id;
   try {
     if (msg.type === 'ping') { await getLib(); self.postMessage({ id, ok: true, pong: true }); return; }
-    if (msg.type === 'warm') { await doTranslate('Hello.', msg.src || 'en', msg.tgt || 'zh'); self.postMessage({ id, ok: true, warm: true }); return; }
+    if (msg.type === 'warm') {
+      // 支持按语向预热：调用方给一句该语向的样例文本，避免用英语样本去热身日语模型
+      const sample = String(msg.text || 'Hello.');
+      await doTranslate(sample, msg.src || 'en', msg.tgt || 'zh');
+      self.postMessage({ id, ok: true, warm: true, src: msg.src || 'en', tgt: msg.tgt || 'zh' });
+      return;
+    }
     if (msg.type === 'translate') {
       const out = await doTranslate(String(msg.text || ''), msg.src, msg.tgt);
       self.postMessage({ id, ok: true, text: out });

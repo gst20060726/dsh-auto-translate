@@ -30,6 +30,7 @@ window.__ModuleLoader__.load({
 			maxChunk: 1000,
 			maxChars: 40000,         // 单次会话翻译字符上限（保护免费额度）
 			localWarmOnce: false,    // 曾成功加载过本机模型（用于启动自动预热，避免每次刷新都回退在线）
+			lang: 'auto',            // auto | zh | en
 			hotkeySummon: 'Ctrl+Alt+T', // 呼出翻译面板
 			hotkeyHide: 'Ctrl+Alt+H',   // 显示/隐藏小圆点
 			hotkeyPause: 'Ctrl+Alt+P',  // 暂停/恢复翻译
@@ -325,6 +326,8 @@ window.__ModuleLoader__.load({
 		// ===== 本机离线引擎（浏览器内 WASM，推理在 vendor/worker.js） =====
 		var localWorker = null, localPending = new Map(), localSeq = 1, localWarm = false, localProgress = null;
 		var localWarming = false, workerRecoveries = 0, storageInfo = '';
+		var loadedPairs = {};   // { 'en-zh': true, 'nllb': true }
+		var warmingPair = null;
 		var QUEUE_MAX = 3000;      // 队列上限：超大页面时不再无节制入队
 		var RECORDS_MAX = 5000;    // 已译文记录上限：避免内存无限增长
 
@@ -340,12 +343,12 @@ window.__ModuleLoader__.load({
 		/** 把技术性报错翻译成用户能懂的下一步 */
 		function hintFor(msg) {
 			var m = String(msg || '');
-			if (/Missing required scale|TransposeDQWeights|dq_actions/.test(m)) return '建议:改用 fp32 干净图(插件默认已是)或点「重试」';
-			if (/Failed to fetch|NetworkError|Load failed/.test(m)) return '建议:检查网络/代理,或点「重试」(宿主端会断点续传)';
-			if (/不支持该语向/.test(m)) return '建议:把「拉丁源语言」从 auto 改成具体语言(如 English)';
-			if (/quotaFinished|429|限流/.test(m)) return '建议:切换到「本机离线」引擎(不限量)';
-			if (/OOM|out of memory|Array buffer allocation/.test(m)) return '建议:关闭其他标签页后点「重试」(fp32 模型占用较大内存)';
-			if (/worker/.test(m)) return '建议:刷新页面(Ctrl+F5)让 worker 重建';
+			if (/Missing required scale|TransposeDQWeights|dq_actions/.test(m)) return t('hintScale');
+			if (/Failed to fetch|NetworkError|Load failed/.test(m)) return t('hintNet');
+			if (/不支持该语向|not support/i.test(m)) return t('hintLang');
+			if (/quotaFinished|429|限流|quota/i.test(m)) return t('hintQuota');
+			if (/OOM|out of memory|Array buffer allocation/i.test(m)) return t('hintOom');
+			if (/worker/i.test(m)) return t('hintWorker');
 			return '';
 		}
 		function requestPersist() {
@@ -395,6 +398,8 @@ window.__ModuleLoader__.load({
 				}
 				if (m.type === 'loaded') {
 					localWarm = true; localProgress = null;
+					if (m.key) loadedPairs[m.key] = true;
+					warmingPair = null;
 					if (!settings.localWarmOnce) { settings.localWarmOnce = true; saveSettings(); }
 					if (m.variant && statusEl) lastError = '';
 					updateStatus();
@@ -486,6 +491,29 @@ window.__ModuleLoader__.load({
 				promise.then(function (v) { if (!done) { done = true; clearTimeout(timer); resolve(v); } },
 					function (e) { if (!done) { done = true; clearTimeout(timer); reject(e); } });
 			});
+		}
+		var PAIR_SAMPLES = { en: 'Hello, this is a warm-up sentence.', zh: '你好，这是一句预热用的测试文本。', ja: 'こんにちは、これは予熱用のテスト文です。', ko: '안녕하세요, 이것은 예열용 테스트 문장입니다.' };
+		function warmPair(src, tgt) {
+			if (warmingPair) return;   // 幂等
+			warmingPair = src + '>' + tgt;
+			requestPersist();
+			try {
+				var w = ensureLocalWorker();
+				var id = localSeq++;
+				localPending.set(id, {
+					resolve: function () { warmingPair = null; localWarm = true; updateStatus(); },
+					reject: function (e) { warmingPair = null; lastError = '语向预热失败(' + src + '→' + tgt + '): ' + ((e && e.message) || e); updateStatus(); },
+				});
+				if (statusEl) statusEl.textContent = '正在预热 ' + src + '→' + tgt + '（首次需下载对应模型）…';
+				w.postMessage({ id: id, type: 'warm', src: src, tgt: tgt, text: PAIR_SAMPLES[src] || 'Hello.' });
+			} catch (e) { warmingPair = null; lastError = '本地 worker 启动失败: ' + ((e && e.message) || e); updateStatus(); }
+		}
+		function cancelWarm() {
+			if (!localWarming && !warmingPair) { if (statusEl) statusEl.textContent = '当前没有进行中的下载'; return; }
+			resetWorker('user-cancel');
+			lastError = '';
+			if (statusEl) statusEl.textContent = '已取消下载/初始化（宿主缓存与浏览器缓存已保留，重新预热会很快）';
+			updateStatus();
 		}
 		function warmLocal() {
 			if (localWarming) return;   // 幂等：重复点击不再叠加下载
@@ -719,6 +747,90 @@ window.__ModuleLoader__.load({
 			updateStatus();
 		}
 
+		// ===================== 面板国际化（zh / en，auto 跟随浏览器） =====================
+		var I18N = {
+			zh: {
+				chipLabel: '译',
+				title: '自动翻译（零 token）', close: '收起', enabled: '启用', target: '目标语言',
+				hoverDelay: '悬停切换(ms)', engine: '引擎', onlineOrder: '在线优先', customTemplate: '自定义模板',
+				latinSource: '拉丁源语言', initOnDevice: '初始化端侧引擎', warmBtn: '预热',
+				summonPanel: '呼出面板', rebind: '改键', summon: '呼出', toggleChip: '显示/隐藏圆点',
+				pauseRow: '暂停/恢复', selfCheck: '自检', test: '测试翻译', diag: '诊断',
+				ondevUnavailable: '端侧不可用?', useOnline: '切到在线引擎', localModel: '本机离线模型',
+				warmLocal: '下载/预热', useLocal: '切到本机', singlePair: '单个语向', warmPair: '预热',
+				abort: '中止', cancelWarm: '取消下载/初始化', compactChip: '挂件缩为小圆点',
+				resetPos: '复位位置', hideChip: '隐藏挂件', clearCache: '清缓存', rescan: '重扫页面',
+				restore: '还原原文', saveDiag: '保存诊断到本机', copyDiag: '复制诊断', retry: '重试',
+				toggleAll: '全部原文/译文', helpBtn: '使用指南', lang: '语言', langAuto: '自动',
+				engineAuto: '自动(本机→端侧→在线)', engineLocal: '本机离线(小模型)', engineOnDevice: '端侧仅',
+				engineOnline: '在线免密钥', engineCustom: '自定义端点', engineOff: '关闭',
+				footerHint: '悬停译文 0.6 秒切回原文；Alt+悬停立即切换。快捷键（可改键）：Ctrl+Alt+T 呼出面板 · Ctrl+Alt+H 显示/隐藏圆点 · Ctrl+Alt+P 暂停/恢复。全程不调用大模型。',
+				stEngine: '引擎', stOnDevOk: ' · 端侧可用', stOnDevNo: ' · 端侧不可用',
+				stCounters: ' | 扫描 {s} / 入队 {q} / 已译 {t} / 跳过语言 {sl} / 失败 {f}',
+				stFallback: ' / 回退 {fb}', stCache: ' | 缓存 {c}', stPaused: ' | 已暂停',
+				stLast: ' | 最近: ', stTruncated: ' …(完整见下方框/点保存诊断)', stRecovered: ' | worker 自愈 {n} 次',
+				stLoaded: ' | 已加载: ', stWarming: ' | 正在预热 ', stWarm: ' | 本机模型已就绪',
+				stDownloading: ' | 本机模型下载中 ', stWorkerDown: ' | 本机 worker 未启动',
+				stFirstRun: ' | 提示:点「切到本机」启用本地离线翻译(仅首次需下载模型)',
+				stOnDevFailed: ' | ⚠ 端侧模型下载失败，请点「切到在线引擎」', stOnDevOff: ' | 端侧已停用',
+				modeAuto: '自动(本机→端侧→在线)', modeOnDevice: '端侧仅', modeOnline: '在线免密钥',
+				modeCustom: '自定义端点', modeOff: '关闭',
+				hintScale: '建议:使用 fp32 干净图(插件默认已是)或点「重试」', hintNet: '建议:检查网络/代理,或点「重试」(宿主端会断点续传)',
+				hintLang: '建议:把「拉丁源语言」从 auto 改成具体语言(如 English)', hintQuota: '建议:切换到「本机离线」引擎(不限量)',
+				hintOom: '建议:关闭其他标签页后点「重试」(fp32 模型占用较大内存)', hintWorker: '建议:刷新页面(Ctrl+F5)让 worker 重建',
+				help: '【自动翻译 · 使用指南】\n\n· 自动工作:页面上的外语文本就地替换为目标语言\n· 悬停约 0.6 秒:在「译文 ↔ 原文」之间来回切换\n· Alt + 悬停:立即切换\n· Ctrl+Alt+T:呼出/关闭本面板(圆点找不到时用这个)\n· Ctrl+Alt+H:显示/隐藏左下角圆点\n· Ctrl+Alt+P:暂停 / 恢复翻译\n\n【引擎】\n· 本机离线(推荐):浏览器内 WASM 推理,零 token、不限量、文本不出本机\n· 在线免密钥:MyMemory,免 key 但有每日额度限制\n· 端侧:浏览器内置 Translator(需能连 Google 组件服务器)\n· 自定义端点:填你自己的翻译服务模板\n\n【本地模型】\n· en↔zh:opus-mt 专用小模型(约 425MB,用 fp32)\n· ja/ko 等:需 NLLB 600M(约 600MB,按需下载)\n· 模型缓存在浏览器,之后完全离线;出错点「保存诊断到本机」',
+			},
+			en: {
+				chipLabel: 'Tr',
+				title: 'Auto-translate (zero token)', close: 'Collapse', enabled: 'Enabled', target: 'Target language',
+				hoverDelay: 'Hover toggle (ms)', engine: 'Engine', onlineOrder: 'Online priority', customTemplate: 'Custom template',
+				latinSource: 'Latin source', initOnDevice: 'Init built-in engine', warmBtn: 'Warm up',
+				summonPanel: 'Open panel', rebind: 'Rebind', summon: 'Open', toggleChip: 'Show/hide chip',
+				pauseRow: 'Pause/resume', selfCheck: 'Self-test', test: 'Test', diag: 'Diagnose',
+				ondevUnavailable: 'Built-in unusable?', useOnline: 'Use online engine', localModel: 'On-device model',
+				warmLocal: 'Download/warm up', useLocal: 'Use on-device', singlePair: 'Single pair', warmPair: 'Warm up',
+				abort: 'Abort', cancelWarm: 'Cancel download/init', compactChip: 'Collapse chip to a dot',
+				resetPos: 'Reset position', hideChip: 'Hide chip', clearCache: 'Clear cache', rescan: 'Rescan page',
+				restore: 'Restore original', saveDiag: 'Save diagnostics', copyDiag: 'Copy diagnostics', retry: 'Retry',
+				toggleAll: 'All original/translated', helpBtn: 'Guide', lang: 'Language', langAuto: 'Auto',
+				engineAuto: 'Auto (local → built-in → online)', engineLocal: 'On-device (small model)', engineOnDevice: 'Built-in only',
+				engineOnline: 'Online keyless', engineCustom: 'Custom endpoint', engineOff: 'Off',
+				footerHint: 'Hover a translation ~0.6s to flip back to the original; Alt+hover flips instantly. Hotkeys (rebindable): Ctrl+Alt+T panel · Ctrl+Alt+H chip · Ctrl+Alt+P pause. No LLM is ever called.',
+				stEngine: 'Engine', stOnDevOk: ' · built-in available', stOnDevNo: ' · built-in unavailable',
+				stCounters: ' | scanned {s} / queued {q} / translated {t} / skipped {sl} / failed {f}',
+				stFallback: ' / fallback {fb}', stCache: ' | cache {c}', stPaused: ' | paused',
+				stLast: ' | last: ', stTruncated: ' ...(full text in the box below / save diagnostics)', stRecovered: ' | worker self-healed {n}x',
+				stLoaded: ' | loaded: ', stWarming: ' | warming ', stWarm: ' | on-device model ready',
+				stDownloading: ' | downloading model ', stWorkerDown: ' | worker not started',
+				stFirstRun: ' | tip: click "Use on-device" to enable offline translation (model downloads once)',
+				stOnDevFailed: ' | ! built-in model download failed — click "Use online engine"', stOnDevOff: ' | built-in disabled',
+				modeAuto: 'Auto (local → built-in → online)', modeOnDevice: 'Built-in only', modeOnline: 'Online keyless',
+				modeCustom: 'Custom endpoint', modeOff: 'Off',
+				hintScale: 'Tip: use the clean fp32 graphs (the default) or click Retry', hintNet: 'Tip: check network/proxy, or click Retry (the host cache resumes)',
+				hintLang: 'Tip: set "Latin source" to a concrete language (e.g. English) instead of auto', hintQuota: 'Tip: switch to the on-device engine (no quota)',
+				hintOom: 'Tip: close other tabs and click Retry (the fp32 model needs memory)', hintWorker: 'Tip: refresh the page (Ctrl+F5) to rebuild the worker',
+				help: '[Auto-translate · Guide]\n\n· Automatic: foreign text on screen is replaced in place\n· Hover ~0.6s: flip between translation and original\n· Alt + hover: flip immediately\n· Ctrl+Alt+T: open/close this panel (use it if the chip is lost)\n· Ctrl+Alt+H: show/hide the chip\n· Ctrl+Alt+P: pause/resume\n\n[Engines]\n· On-device (recommended): WASM in your browser, no tokens, no quota, text never leaves the machine\n· Online keyless: MyMemory, no key but a daily quota\n· Built-in: browser Translator API (needs Google component servers)\n· Custom endpoint: point at your own service\n\n[Local models]\n· en<->zh: opus-mt small models (~425MB, fp32)\n· ja/ko etc.: NLLB 600M (~600MB, on demand)\n· Cached in the browser; fully offline afterwards. On errors click "Save diagnostics".',
+			},
+		};
+		function L() {
+			if (settings.lang === 'zh' || settings.lang === 'en') return settings.lang;
+			try {
+				var n = (typeof navigator !== 'undefined' && navigator.language) || '';
+				return String(n).toLowerCase().indexOf('zh') === 0 ? 'zh' : 'en';
+			} catch (e) { return 'zh'; }
+		}
+		function t(key) {
+			var pack = I18N[L()] || I18N.zh;
+			return (pack && pack[key]) || I18N.zh[key] || key;
+		}
+		function applyI18n() {
+			if (!cardEl) return;
+			cardEl.querySelectorAll('[data-i18n]').forEach(function (el) { el.textContent = t(el.getAttribute('data-i18n')); });
+			cardEl.querySelectorAll('[data-i18n-html]').forEach(function (el) { el.innerHTML = t(el.getAttribute('data-i18n-html')); });
+			if (statusEl) updateStatus();
+		}
+		function helpText() { return t('help'); }
+
 		// ===================== 变更监听 =====================
 		var mo = null;
 		function createObserver() { return new MutationObserver(function (muts) {
@@ -746,34 +858,37 @@ window.__ModuleLoader__.load({
 		function updateStatus() {
 			if (!statusEl) return;
 			var T = translatorCtor();
-			var modeName = { auto: '自动(端侧→在线)', ondevice: '端侧仅', online: '在线免密钥', custom: '自定义端点', http: '自定义端点', off: '关闭' }[settings.engine] || settings.engine;
-			statusEl.textContent = '引擎 ' + modeName + (settings.engine === 'auto' || settings.engine === 'ondevice' ? (T ? ' · 端侧可用' : ' · 端侧不可用') : '')
-				+ ' | 扫描 ' + stats.scanned + ' / 入队 ' + stats.queued + ' / 已译 ' + stats.translated
-				+ ' / 跳过语言 ' + stats.skippedLang + ' / 失败 ' + stats.failed + (stats.fellBack ? ' / 回退 ' + stats.fellBack : '')
-				+ ' | 缓存 ' + cache.size + (settings.enabled ? '' : ' | 已暂停');
+			var modeName = { auto: t('modeAuto'), ondevice: t('modeOnDevice'), online: t('modeOnline'), custom: t('modeCustom'), http: t('modeCustom'), off: t('modeOff') }[settings.engine] || settings.engine;
+			statusEl.textContent = t('stEngine') + ' ' + modeName + (settings.engine === 'auto' || settings.engine === 'ondevice' ? (T ? t('stOnDevOk') : t('stOnDevNo')) : '')
+				+ t('stCounters').replace('{s}', stats.scanned).replace('{q}', stats.queued).replace('{t}', stats.translated).replace('{sl}', stats.skippedLang).replace('{f}', stats.failed)
+				+ (stats.fellBack ? t('stFallback').replace('{fb}', stats.fellBack) : '')
+				+ t('stCache').replace('{c}', cache.size) + (settings.enabled ? '' : t('stPaused'));
 			if (lastError) {
-				statusEl.textContent += ' | 最近: ' + String(lastError).slice(0, 80) + (String(lastError).length > 80 ? ' …(完整见下方框/点保存诊断)' : '');
+				statusEl.textContent += t('stLast') + String(lastError).slice(0, 80) + (String(lastError).length > 80 ? t('stTruncated') : '');
 				var hint = hintFor(lastError);
 				if (hint) statusEl.textContent += ' | ' + hint;
 			}
-			if (workerRecoveries && statusEl) statusEl.textContent += ' | worker 自愈 ' + workerRecoveries + ' 次';
+			if (workerRecoveries && statusEl) statusEl.textContent += t('stRecovered').replace('{n}', workerRecoveries);
+			var paired = Object.keys(loadedPairs);
+			if (paired.length && statusEl) statusEl.textContent += t('stLoaded') + paired.join(',');
+			if (warmingPair && statusEl) statusEl.textContent += t('stWarming') + warmingPair;
 			var errBoxEl = cardEl && cardEl.querySelector('[data-el="errbox"]');
 			if (errBoxEl) {
 				if (lastError) { errBoxEl.value = String(lastError); errBoxEl.style.display = 'block'; }
 				else { errBoxEl.style.display = 'none'; }
 			}
-			if (stats.failed > 0 && !stats.translated && settings.engine === 'ondevice') statusEl.textContent += ' | ⚠ 端侧模型下载失败，请点「切到在线引擎」';
-			if (onDeviceDisabled) statusEl.textContent += ' | 端侧已停用';
+			if (stats.failed > 0 && !stats.translated && settings.engine === 'ondevice') statusEl.textContent += t('stOnDevFailed');
+			if (onDeviceDisabled) statusEl.textContent += t('stOnDevOff');
 			if (localWarm) {
-				statusEl.textContent += ' | 本机模型已就绪';
+				statusEl.textContent += t('stWarm');
 			} else if (localProgress) {
 				var pct = localProgress.progress ? Math.max(0, Math.min(100, Math.round(localProgress.progress))) : 0;
 				var mb = localProgress.total ? ' (' + (localProgress.loaded / 1048576).toFixed(1) + '/' + (localProgress.total / 1048576).toFixed(1) + 'MB)' : '';
-				statusEl.textContent += ' | 本机模型下载中 ' + pct + '%' + mb + (localProgress.file ? ' · ' + String(localProgress.file).slice(-26) : '');
+				statusEl.textContent += t('stDownloading') + pct + '%' + mb + (localProgress.file ? ' · ' + String(localProgress.file).slice(-26) : '');
 			} else if (!localBooted) {
-				statusEl.textContent += ' | 本机 worker 未启动';
+				statusEl.textContent += t('stWorkerDown');
 			}
-			if (!localWarm && !settings.localWarmOnce && settings.engine !== 'off') statusEl.textContent += ' | 提示:点「切到本机」启用本地离线翻译(仅首次需下载模型)';
+			if (!localWarm && !settings.localWarmOnce && settings.engine !== 'off') statusEl.textContent += t('stFirstRun');
 			var pbarEl = cardEl && cardEl.querySelector('[data-el="pbar"]');
 			var pfillEl = cardEl && cardEl.querySelector('[data-el="pfill"]');
 			if (pbarEl && pfillEl) {
@@ -820,31 +935,34 @@ window.__ModuleLoader__.load({
 			sr.appendChild(style);
 			cardEl = document.createElement('div');
 			cardEl.className = 'card';
-			cardEl.innerHTML = '<div class="row"><strong>自动翻译（零 token）</strong><button data-act="close">收起</button></div>'
-				+ '<div class="row"><label>启用</label><input type="checkbox" data-set="enabled"></div>'
-				+ '<div class="row"><label>目标语言</label><select data-set="target"></select></div>'
-				+ '<div class="row"><label>悬停切换(ms)</label><input type="number" min="0" max="5000" step="100" data-set="hoverDelayMs" style="width:80px"></div>'
-				+ '<div class="row"><label>引擎</label><select data-set="engine"><option value="auto">自动(本机→端侧→在线)</option><option value="local">本机离线(小模型)</option><option value="ondevice">端侧仅</option><option value="online">在线免密钥</option><option value="custom">自定义端点</option><option value="off">关闭</option></select></div>'
-				+ '<div class="row"><label>在线优先</label><select data-set="onlineOrder"><option value="google">Google</option><option value="mymemory">MyMemory</option></select></div>'
-				+ '<div class="row"><label>自定义模板</label><input type="text" data-set="endpoint" placeholder="…?q={text}&target={target}" style="max-width:150px"></div>'
-				+ '<div class="row"><label>拉丁源语言</label><select data-set="latinSource"></select></div>'
-				+ '<div class="row"><label>初始化端侧引擎</label><button data-act="warm">预热</button></div>'
-				+ '<div class="row"><label>呼出面板</label><button data-act="rebindSummon"><span data-el="hkSummon"></span> 改键</button><button data-act="summon">呼出</button></div>'
-				+ '<div class="row"><label>显示/隐藏圆点</label><button data-act="rebindHide"><span data-el="hkHide"></span> 改键</button></div>'
-				+ '<div class="row"><label>暂停/恢复</label><button data-act="rebindPause"><span data-el="hkPause"></span> 改键</button></div>'
-				+ '<div class="row"><label>自检</label><button data-act="test">测试翻译</button><button data-act="diag">诊断</button></div>'
-				+ '<div class="row"><label>端侧不可用?</label><button data-act="useonline">切到在线引擎</button></div>'
-				+ '<div class="row"><label>本机离线模型</label><button data-act="warmlocal">下载/预热</button><button data-act="uselocal">切到本机</button></div>'
-				+ '<div class="row"><label>挂件缩为小圆点</label><input type="checkbox" data-set="chipCompact"></div>'
-				+ '<div class="row"><button data-act="resetpos">复位位置</button><button data-act="hide">隐藏挂件</button><button data-act="clearcache">清缓存</button></div>'
-				+ '<div class="row"><button data-act="rescan">重扫页面</button><button data-act="restore">还原原文</button></div>'
+			cardEl.innerHTML = '<div class="row"><strong data-i18n="title"></strong><button data-act="close" data-i18n="close"></button></div>'
+				+ '<div class="row"><label data-i18n="lang"></label><select data-set="lang"><option value="auto" data-i18n="langAuto"></option><option value="zh">中文</option><option value="en">English</option></select></div>'
+				+ '<div class="row"><label data-i18n="enabled"></label><input type="checkbox" data-set="enabled"></div>'
+				+ '<div class="row"><label data-i18n="target"></label><select data-set="target"></select></div>'
+				+ '<div class="row"><label data-i18n="hoverDelay"></label><input type="number" min="0" max="5000" step="100" data-set="hoverDelayMs" style="width:80px"></div>'
+				+ '<div class="row"><label data-i18n="engine"></label><select data-set="engine"><option value="auto" data-i18n="engineAuto"></option><option value="local" data-i18n="engineLocal"></option><option value="ondevice" data-i18n="engineOnDevice"></option><option value="online" data-i18n="engineOnline"></option><option value="custom" data-i18n="engineCustom"></option><option value="off" data-i18n="engineOff"></option></select></div>'
+				+ '<div class="row"><label data-i18n="onlineOrder"></label><select data-set="onlineOrder"><option value="google">Google</option><option value="mymemory">MyMemory</option></select></div>'
+				+ '<div class="row"><label data-i18n="customTemplate"></label><input type="text" data-set="endpoint" placeholder="…?q={text}&target={target}" style="max-width:150px"></div>'
+				+ '<div class="row"><label data-i18n="latinSource"></label><select data-set="latinSource"></select></div>'
+				+ '<div class="row"><label data-i18n="initOnDevice"></label><button data-act="warm" data-i18n="warmBtn"></button></div>'
+				+ '<div class="row"><label data-i18n="summonPanel"></label><button data-act="rebindSummon"><span data-el="hkSummon"></span> <span data-i18n="rebind"></span></button><button data-act="summon" data-i18n="summon"></button></div>'
+				+ '<div class="row"><label data-i18n="toggleChip"></label><button data-act="rebindHide"><span data-el="hkHide"></span> <span data-i18n="rebind"></span></button></div>'
+				+ '<div class="row"><label data-i18n="pauseRow"></label><button data-act="rebindPause"><span data-el="hkPause"></span> <span data-i18n="rebind"></span></button></div>'
+				+ '<div class="row"><label data-i18n="selfCheck"></label><button data-act="test" data-i18n="test"></button><button data-act="diag" data-i18n="diag"></button></div>'
+				+ '<div class="row"><label data-i18n="ondevUnavailable"></label><button data-act="useonline" data-i18n="useOnline"></button></div>'
+				+ '<div class="row"><label data-i18n="localModel"></label><button data-act="warmlocal" data-i18n="warmLocal"></button><button data-act="uselocal" data-i18n="useLocal"></button></div>'
+				+ '<div class="row"><label data-i18n="singlePair"></label><select data-el="pairSel"><option value="en>zh">en → zh</option><option value="zh>en">zh → en</option><option value="ja>zh">ja → zh (NLLB)</option><option value="ko>zh">ko → zh (NLLB)</option></select><button data-act="warmPair" data-i18n="warmPair"></button></div>'
+				+ '<div class="row"><label data-i18n="abort"></label><button data-act="cancelWarm" data-i18n="cancelWarm"></button></div>'
+				+ '<div class="row"><label data-i18n="compactChip"></label><input type="checkbox" data-set="chipCompact"></div>'
+				+ '<div class="row"><button data-act="resetpos" data-i18n="resetPos"></button><button data-act="hide" data-i18n="hideChip"></button><button data-act="clearcache" data-i18n="clearCache"></button></div>'
+				+ '<div class="row"><button data-act="rescan" data-i18n="rescan"></button><button data-act="restore" data-i18n="restore"></button></div>'
 				+ '<div class="hint" data-el="status"></div>'
 				+ '<div class="pbar" data-el="pbar"><div class="pfill" data-el="pfill"></div></div>'
 				+ '<textarea class="errbox" data-el="errbox" readonly rows="4" spellcheck="false"></textarea>'
-				+ '<div class="row"><button data-act="savediag">保存诊断到本机</button><button data-act="copydiag">复制诊断</button></div>'
-				+ '<div class="row"><button data-act="retry">重试</button><button data-act="toggleAll">全部原文/译文</button><button data-act="help">使用指南</button></div>'
+				+ '<div class="row"><button data-act="savediag" data-i18n="saveDiag"></button><button data-act="copydiag" data-i18n="copyDiag"></button></div>'
+				+ '<div class="row"><button data-act="retry" data-i18n="retry"></button><button data-act="toggleAll" data-i18n="toggleAll"></button><button data-act="help" data-i18n="helpBtn"></button></div>'
 				+ '<div class="help" data-el="help"></div>'
-				+ '<div class="hint">悬停译文 0.6 秒切回原文；Alt+悬停立即切换。默认快捷键（可在上方改键）：<b>Ctrl+Alt+T</b> 呼出面板 · <b>Ctrl+Alt+H</b> 显示/隐藏圆点 · <b>Ctrl+Alt+P</b> 暂停/恢复。选用 Ctrl+Alt 系列是为了不与浏览器/DSH 的 Ctrl+Shift 系快捷键冲突。全程不调用大模型。</div>';
+				+ '<div class="hint" data-i18n="footerHint"></div>';
 			var chip = document.createElement('div');
 			chip.className = 'chip';
 			chip.title = '拖动可移动 · 单击打开设置';
@@ -919,12 +1037,18 @@ window.__ModuleLoader__.load({
 				else if (act === 'help') {
 					var helpEl = cardEl && cardEl.querySelector('[data-el="help"]');
 					if (helpEl) {
-						if (!helpEl.textContent) helpEl.textContent = HELP_TEXT;
+						helpEl.textContent = helpText();
 						helpEl.classList.toggle('on');
 					}
 				}
 				else if (act === 'copydiag') copyDiag();
 				else if (act === 'warmlocal') warmLocal();
+				else if (act === 'warmPair') {
+					var sel = cardEl.querySelector('[data-el="pairSel"]');
+					var parts = String(sel && sel.value || 'en>zh').split('>');
+					warmPair(parts[0], parts[1]);
+				}
+				else if (act === 'cancelWarm') cancelWarm();
 				else if (act === 'summon') summonPanel();
 				else if (act === 'rebindSummon') { rebinding = 'hotkeySummon'; if (statusEl) statusEl.textContent = '请按下新的「呼出面板」组合键…（Esc 取消）'; }
 				else if (act === 'rebindHide') { rebinding = 'hotkeyHide'; if (statusEl) statusEl.textContent = '请按下新的「显示/隐藏圆点」组合键…（Esc 取消）'; }
@@ -956,10 +1080,12 @@ window.__ModuleLoader__.load({
 				if (key === 'hoverDelayMs' || key === 'cacheLimit') val = Number(val) || 0;
 				settings[key] = val;
 				saveSettings();
+				if (key === 'lang') applyI18n();
 				applySettingsToUI();
 				if (key === 'enabled') { if (!settings.enabled) restoreAll(); else scanRoot(document.body, 0); }
 				if (key === 'engine' || key === 'target' || key === 'latinSource') { records = []; recordByNode = new WeakMap(); processed = new WeakSet(); translatedCount = 0; scanRoot(document.body, 0); }
 			});
+			applyI18n();
 			applySettingsToUI();
 			updateStatus();
 		}
@@ -995,8 +1121,8 @@ window.__ModuleLoader__.load({
 			if (chipEl) chipEl.className = 'dot' + (settings.enabled && settings.engine !== 'off' ? (lastError ? ' warn' : '') : ' off');
 			var chipText = chipEl && chipEl.parentElement && chipEl.parentElement.querySelector('[data-el="chiptext"]');
 			if (chipText) {
-				if (localProgress) chipText.textContent = '译 ' + (localProgress.progress ? Math.round(localProgress.progress) + '%' : '…');
-				else chipText.textContent = '译 ' + settings.target;
+				if (localProgress) chipText.textContent = t('chipLabel') + ' ' + (localProgress.progress ? Math.round(localProgress.progress) + '%' : '…');
+				else chipText.textContent = t('chipLabel') + ' ' + settings.target;
 			}
 			if (chipNode) { chipNode.classList.toggle('compact', !!settings.chipCompact); chipNode.classList.toggle('hidden', !!settings.chipHidden); }
 			var hkS = cardEl && cardEl.querySelector('[data-el="hkSummon"]'); if (hkS) hkS.textContent = settings.hotkeySummon || '(未设置)';
@@ -1042,6 +1168,7 @@ window.__ModuleLoader__.load({
 				localWarm: localWarm, localWarming: localWarming, localBooted: localBooted, localProgress: localProgress,
 				detectorDisabled: detectorDisabled, workerRecoveries: workerRecoveries, queue: queue.length, records: records.length,
 				storage: storageInfo, limits: { queue: QUEUE_MAX, records: RECORDS_MAX },
+				loadedPairs: Object.keys(loadedPairs), warmingPair: warmingPair,
 				records: records.length, panelMounted: !!hostEl, enabled: settings.enabled
 			});
 		}
@@ -1136,7 +1263,7 @@ window.__ModuleLoader__.load({
 				enable: setEnabled, warmUp: warmUp, cache: cache, stats: function () { return { cached: cache.size, translated: translatedCount }; },
 				showChip: function () { settings.chipHidden = false; saveSettings(); applySettingsToUI(); },
 				test: testTranslate, diagnose: function () { return diagnose(); }, warmLocal: warmLocal, summon: summonPanel,
-				saveDiag: saveDiagToHost, copyDiag: copyDiag
+				saveDiag: saveDiagToHost, copyDiag: copyDiag, warmPair: warmPair, cancelWarm: cancelWarm
 			};
 			console.info('[dsh-auto-translate] active — on-device, zero LLM tokens');
 		}

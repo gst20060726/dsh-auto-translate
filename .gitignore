@@ -8,5 +8,7 @@ diagnose-*.json
 *-slim.zip
 *.bundle
 .DS_Store
+# generated status snapshot (run: node scripts/dashboard.mjs)
+dashboard.html
 # ORT runtime is large: not committed, fetch it with npm run fetch-vendor or let the host fall back to the CDN
 vendor/ort/*.wasm

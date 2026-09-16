@@ -25,6 +25,27 @@
 | 重启脚本 | `C:/Users/20549/.dsh/restart-dsh-web.ps1` |
 | 保险重启（SHA 比对，幂等） | `C:/Users/20549/.dsh/restart-guard.ps1` |
 
+## 随时查看状态（三个入口）
+
+- 桌面快捷方式：**`dsh-translate 状态面板`**（交互式控制台，`-NoExit` 所以不会闪退）与
+  **`dsh-translate 仪表盘`**（先刷新快照再用 Edge/Chrome 应用模式打开 `dashboard.html`）。
+  快捷方式指向 `scripts/status.ps1` 与 `scripts/open-dashboard.vbs`，重建方式见本节末尾。
+- 控制台面板：
+
+      powershell -ExecutionPolicy Bypass -File scripts/status.ps1            # 一屏：本地仓库 / Gitee / npm / 安装态
+      powershell -ExecutionPolicy Bypass -File scripts/status.ps1 -Open      # 同时打开 npm 与 Gitee 页面
+      powershell -ExecutionPolicy Bypass -File scripts/status.ps1 -Watch 30  # 每 30 秒自动刷新
+
+- HTML 仪表盘（中文界面、可一键复制安装命令、页面内可实时拉 npm/Gitee）：
+
+      node scripts/dashboard.mjs           # 生成 dashboard.html（已 gitignore）
+      node scripts/dashboard.mjs --open    # 生成并打开
+
+> **编码坑（重要）**：`scripts/status.ps1`、`publish.ps1`、`open-dashboard.vbs` 全部**刻意写成纯 ASCII**。
+> 原因是 Windows PowerShell 5.1 / wscript 读取**无 BOM 的 UTF-8** 文件时按 GBK 解释，中文字符串字面量的
+> 末字节可能撞上 `'`，把整个脚本撕成非法 token 而解析失败（实测过两次）。所以凡是 `.ps1`/`.vbs` 一律 ASCII，
+> 需要中文界面就交给 Node 脚本（Node 恒定按 UTF-8 读文件）。
+
 ## 常用命令
 
     cd C:\Users\20549\.dsh\plugins\dsh-auto-translate

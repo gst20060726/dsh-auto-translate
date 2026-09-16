@@ -13,8 +13,8 @@ const BUNDLE = BASE + 'transformers.esm.v2.js';
 const REVISIONS = {
   'Xenova/opus-mt-en-zh': '046f55aec303cdee3e0318604406d4df20f1e8ea',
   'Xenova/opus-mt-zh-en': '39d480d52a9ea3065a1f117adfe4dbc55de10e6f',
-  'Xenova/opus-mt-ja-en': 'main',
-  'Xenova/opus-mt-ko-en': 'main',
+  'Xenova/opus-mt-ja-en': '1a906cfaaf7c8f4193f67f5885c082aa6dbd9d16',
+  'Xenova/opus-mt-ko-en': 'd9fa1ac6008242100fecb4fff9b0a5917a1be81f',
   'Xenova/nllb-200-distilled-600M': '261c31d1a5732c67cdd16d80e8d6088507c7ccea',
 };
 

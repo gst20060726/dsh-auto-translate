@@ -88,8 +88,12 @@ test('worker 锁定模型 revision 且映射 NLLB 语言码', () => {
   const t = stub.__test
   assert.ok(t && t.REVISIONS, 'worker 应暴露 __test.REVISIONS')
   const names = Object.keys(t.REVISIONS)
-  assert.equal(names.length, 3)
-  for (const v of Object.values(t.REVISIONS)) assert.match(v, /^[0-9a-f]{40}$/, 'revision 必须是完整 commit sha')
+  // worker 支持的每个模型都必须锁到一个完整 commit sha（不允许留 'main' 这类占位）
+  assert.ok(names.length >= 5, '应覆盖全部可加载模型，实际 ' + names.length)
+  for (const [k, v] of Object.entries(t.REVISIONS)) assert.match(v, /^[0-9a-f]{40}$/, k + ' 必须锁到完整 commit sha')
+  for (const need of ['Xenova/opus-mt-en-zh', 'Xenova/opus-mt-zh-en', 'Xenova/opus-mt-ja-en', 'Xenova/opus-mt-ko-en']) {
+    assert.ok(names.includes(need), '缺少 ' + need)
+  }
 })
 
 test('宿主半具备必要防护与能力', () => {

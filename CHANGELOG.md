@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.5 — 2026-09-16
+
+### 修复
+- **「能翻译但再停留无法复原」**：切换引擎（或重试 / 重扫 / 切本机 / 切在线）时会 `records = []`，但**页面上
+  `data-dsh-at` 标记没被清掉**（该标记是 0.2.2 引入的）。于是再悬停那块时 `onOver` 认出「已翻译的宿主」并调用
+  `toggleHost`，而 `records` 已空 → **什么都不做，静默失效**；这些块还会一直被当成「已翻译」，从此不再响应悬停。
+  现在所有复位路径统一走 `resetTranslationState()`：清 `records` / `recordByNode` / `processed` / `translatedCount`
+  **并同步清掉 DOM 标记**，同时复位 `hoverHost`、`hoverTimer`、`toggledHost`。
+- 新增回归测试：契约级（禁止再手写三件套、复位函数必须清 DOM 标记）+ E2E（复现「翻译 → 切引擎 → 再悬停」序列）。
+
 ## 0.2.4 — 2026-09-16
 
 ### 健壮性

@@ -157,6 +157,23 @@ test('悬停路径必须有界：本机翻译超时保护 + 会话上限 + busy 
   assert.match(host[1], /finally \{ hoverBusy = false; \}/, 'hoverBusy 必须在 finally 中释放')
 })
 
+test('清空译文记录必须走 resetTranslationState()，且同时清掉 data-dsh-at 标记', () => {
+  const src = read('client.js')
+  // 1) 不允许任何地方再手写这三件套（漏掉 DOM 标记就会让悬停静默失效）
+  assert.doesNotMatch(src, /records = \[\]; recordByNode = new WeakMap\(\)/,
+    '不得手写 records/recordByNode/processed 三件套，必须调用 resetTranslationState()')
+  // 2) 统一复位函数必须存在，且必须清 DOM 标记 + 清 processed/records + 复位悬停状态
+  const fn = src.match(/function resetTranslationState\(\) \{([\s\S]*?)\n\t\t\}/)
+  assert.ok(fn, '必须有 resetTranslationState()')
+  assert.match(fn[1], /records = \[\]/, '必须清空 records')
+  assert.match(fn[1], /processed = new WeakSet\(\)/, '必须清空 processed（否则同一块无法被重新翻译）')
+  assert.match(fn[1], /removeAttribute\('data-dsh-at'\)/, '必须清掉页面上的 data-dsh-at 标记')
+  assert.match(fn[1], /hoverHost = null/, '必须复位悬停宿主状态')
+  // 3) 至少 4 个调用点（retry / rescan / uselocal / useonline / 设置变更）
+  const calls = src.split('resetTranslationState();').length - 1
+  assert.ok(calls >= 4, 'resetTranslationState() 调用点应 >= 4，实际 ' + calls)
+})
+
 test('悬停模式绝不自动扫描，且丢弃自动扫描残留队列', () => {
   const src = read('client.js')
   // 悬停模式：scanRoot 必须直接返回，pump 必须丢弃队列，两者都不得自动翻译

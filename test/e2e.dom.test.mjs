@@ -147,6 +147,46 @@ test('E2E: 流式追加的文本只在稳定后才翻译（不与追加剧烈打
   }
 })
 
+test('E2E 悬停模式: 切换引擎后不应留下会让悬停卡死的标记（回归）', { skip }, async () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><body><div id="a"><p id="p1">Hello world, this needs translation.</p></div></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true },
+  )
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      version: 4, engine: 'hover', hoverEngine: 'local', target: 'zh', latinSource: 'en',
+      hoverDelayMs: 100, minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
+    }))
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const p1 = window.document.getElementById('p1')
+    const node = p1.firstChild
+    const mod = loadClientInto(window)
+    mod.apply({})
+
+    // 1) 悬停翻译一块 → 该块被标记
+    p1.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+    assert.ok(await waitFor(() => /ZH</.test(node.nodeValue), 3000), '第一次悬停应翻译')
+    assert.equal(p1.getAttribute('data-dsh-at'), 'translated', '翻译后宿主应带标记')
+
+    // 2) 模拟用户切换引擎：实现里会调用 resetTranslationState()
+    mod.__test.resetTranslationState()
+    assert.equal(p1.getAttribute('data-dsh-at'), null, '复位后 DOM 标记必须被清掉（否则悬停会卡死）')
+    assert.equal(mod.__test.hoverHostState(p1).state, 'none', '复位后应回到「未翻译」状态')
+
+    // 3) 再次悬停仍能正常触发（旧 bug：records 空 + 残留标记 → 完全无反应）
+    p1.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true, relatedTarget: window.document.body }))
+    await sleep(150)
+    p1.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+    assert.ok(await waitFor(() => /ZH</.test(node.nodeValue), 3000),
+      '复位后再次悬停必须能翻译，实际: ' + JSON.stringify(node.nodeValue))
+  } finally {
+    window.close()
+  }
+})
+
 test('E2E 悬停模式: 悬停翻译该块后，再次悬停同一块可复原为原文', { skip }, async () => {
   const dom = new JSDOM(
     '<!doctype html><html><body><div id="a"><p id="p1">Hello world, this needs translation.</p></div></body></html>',

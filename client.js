@@ -1110,12 +1110,24 @@ window.__ModuleLoader__.load({
 				var r = records[i];
 				if (r.node.isConnected && r.showingOriginal === false) { r.node.nodeValue = r.original; selfWrites.set(r.node, Date.now()); }
 			}
+			resetTranslationState();
+			updateStatus();
+		}
+		// 丢弃所有译文记录：必须**同时**清掉页面上的 data-dsh-at 标记。
+		// 否则宿主上残留的标记会让悬停逻辑以为"这块已翻译"，而 records 已空 → 既翻不动也复原不了（静默失效）。
+		function resetTranslationState() {
 			records = [];
 			recordByNode = new WeakMap();
 			processed = new WeakSet();
 			translatedCount = 0;
-			try { document.querySelectorAll('[data-dsh-at]').forEach(function (el) { el.removeAttribute('data-dsh-at'); }); } catch (e) { }
-			updateStatus();
+			hoverDone = new WeakSet();
+			hoverHost = null;
+			if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
+			toggledHost = null;
+			try {
+				var marked = document.querySelectorAll('[data-dsh-at]');
+				for (var k = 0; k < marked.length; k++) marked[k].removeAttribute('data-dsh-at');
+			} catch (e) { }
 		}
 
 		// ===================== 面板国际化（zh / en，auto 跟随浏览器） =====================
@@ -1437,7 +1449,7 @@ window.__ModuleLoader__.load({
 				else if (act === 'retry') {
 					lastError = '';
 					stats.chars = 0;                 // 重试即开启新一轮会话，否则会立刻再次撞上限
-					records = []; recordByNode = new WeakMap(); processed = new WeakSet(); translatedCount = 0;
+					resetTranslationState();
 					if (!localWarm) warmLocal();
 					scanRoot(document.body, 0);
 					updateStatus();
@@ -1487,7 +1499,7 @@ window.__ModuleLoader__.load({
 						settings.engine = 'local';
 						saveSettings();
 						applySettingsToUI();
-						records = []; recordByNode = new WeakMap(); processed = new WeakSet(); translatedCount = 0;
+						resetTranslationState();
 						scanRoot(document.body, 0);
 						warmLocal();
 						updateStatus();
@@ -1503,7 +1515,7 @@ window.__ModuleLoader__.load({
 						settings.engine = 'online';
 						saveSettings();
 						applySettingsToUI();
-						records = []; recordByNode = new WeakMap(); processed = new WeakSet(); translatedCount = 0;
+						resetTranslationState();
 						scanRoot(document.body, 0);
 						updateStatus();
 					}
@@ -1523,7 +1535,7 @@ window.__ModuleLoader__.load({
 				if (key === 'enabled') { if (!settings.enabled) restoreAll(); else scanRoot(document.body, 0); }
 				if (key === 'workerMode') { resetWorker('mode-change'); }
 				if (key === 'multiMode' && localWorker && localWorker.post) { localWorker.post({ type: 'config', multiMode: settings.multiMode }); }
-				if (key === 'engine' || key === 'target' || key === 'latinSource') { records = []; recordByNode = new WeakMap(); processed = new WeakSet(); translatedCount = 0; scanRoot(document.body, 0); }
+				if (key === 'engine' || key === 'target' || key === 'latinSource') { resetTranslationState(); scanRoot(document.body, 0); }
 			});
 			applyI18n();
 			applySettingsToUI();
@@ -1726,7 +1738,7 @@ window.__ModuleLoader__.load({
 			mmLang: typeof mmLang === 'function' ? mmLang : null, inViewport: inViewport, planSource: planSource,
 			splitSentences: splitSentences,
 			sessionLimitActive: sessionLimitActive, sessionLimit: sessionLimit, settings: settings,
-			actualModeFor: actualModeFor,
+			actualModeFor: actualModeFor, resetTranslationState: resetTranslationState, hoverHostState: hoverHostState,
 			limits: { QUEUE_MAX: QUEUE_MAX, RECORDS_MAX: RECORDS_MAX },
 		};
 		return module.exports;

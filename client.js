@@ -494,6 +494,7 @@ window.__ModuleLoader__.load({
 			localWorker = null;
 			localWarm = false;
 			localWarming = false;
+			localBooted = false;      // 与新 worker 保持一致：否则诊断里会出现 localWarm/localBooted 自相矛盾
 			localProgress = null;
 			if (reason) { workerRecoveries++; console.warn('[dsh-auto-translate] worker reset: ' + reason); }
 		}

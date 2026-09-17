@@ -35,6 +35,25 @@ function Row($k, $v, $color = 'Gray') {
   Write-Host $v -ForegroundColor $color
 }
 
+function Compare-VersionText($a, $b) {
+  # 1 = $a newer, -1 = $a older, 0 = equal, '' = not comparable by numeric core
+  $pa = @(($a -split '[-+]')[0] -split '\.')
+  $pb = @(($b -split '[-+]')[0] -split '\.')
+  $n = $pa.Count
+  if ($pb.Count -gt $n) { $n = $pb.Count }
+  for ($i = 0; $i -lt $n; $i++) {
+    $x = $(if ($i -lt $pa.Count) { $pa[$i] } else { '0' })
+    $y = $(if ($i -lt $pb.Count) { $pb[$i] } else { '0' })
+    $nx = 0; $ny = 0
+    if (-not [int]::TryParse($x, [ref]$nx)) { return '' }
+    if (-not [int]::TryParse($y, [ref]$ny)) { return '' }
+    if ($nx -gt $ny) { return 1 }
+    if ($nx -lt $ny) { return -1 }
+  }
+  if ($a -eq $b) { return 0 }
+  return ''
+}
+
 function Get-Status {
   $out = [ordered]@{}
 
@@ -94,6 +113,38 @@ function Get-Status {
     }
   } else {
     $out.npm = [ordered]@{ ok = $false; err = $err; url = "https://www.npmjs.com/package/$name" }
+  }
+
+  # ---- local package.json version vs npm published version ----
+  $out.npm.local = $version
+  if (-not $out.npm.ok) {
+    $out.npm.drift = [ordered]@{
+      state = 'unknown'; color = 'Yellow'
+      msg   = "$WARN cannot compare: local $version vs npm (registry query failed)"
+    }
+  } elseif ($out.npm.version -eq $version) {
+    $out.npm.drift = [ordered]@{
+      state = 'sync'; color = 'Green'
+      msg   = "$OK in sync: local package.json = npm published = $version"
+    }
+  } else {
+    $cmp = Compare-VersionText $version $out.npm.version
+    if ($cmp -eq 1) {
+      $out.npm.drift = [ordered]@{
+        state = 'ahead'; color = 'Yellow'
+        msg   = "$WARN DRIFT: local $version is newer than npm $($out.npm.version) (publish pending)"
+      }
+    } elseif ($cmp -eq -1) {
+      $out.npm.drift = [ordered]@{
+        state = 'behind'; color = 'Red'
+        msg   = "$WARN DRIFT: local $version is older than npm $($out.npm.version) (republish or pull needed)"
+      }
+    } else {
+      $out.npm.drift = [ordered]@{
+        state = 'unknown'; color = 'Yellow'
+        msg   = "$WARN DRIFT: local $version differs from npm $($out.npm.version) (order not comparable)"
+      }
+    }
   }
 
   # ---- local tgz ----
@@ -178,6 +229,7 @@ function Render($s) {
     Row 'state' "query failed: $($s.npm.err)" 'Red'
     Row 'pkg page' $s.npm.url 'DarkCyan'
   }
+  Row 'local vs npm' $s.npm.drift.msg $s.npm.drift.color
 
   Section 'USAGE METRICS'
   Row 'dl / week' $s.metrics.week $(if ($s.metrics.week -eq 'n/a') { 'Yellow' } else { 'Green' })

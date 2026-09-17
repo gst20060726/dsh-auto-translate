@@ -97,6 +97,45 @@
 - 加载方式：因为没有 Chrome，脚本未能自动打开。用 Edge：`edge://extensions` → 开发人员模式 →
   加载解压缩的扩展 → 选 `C:\Users\20549\.dsh\browser-extension`。若 Edge 的侧边栏 API 与 Chrome 不兼容，需另议。
 
+## AgentTeams 实战：契约坑清单（2026-09-17 首次真实跑通）
+
+首次用 AgentTeams 做了「status.ps1 增加 npm 版本漂移提示」（提交 `2ef1af5`，团队 `translate-status-drift-2`）。
+**流程本身完全跑通**：草案 → Web 界面批准 → 调度派发 → 领取 → 实现 → 独立验证（5/5）→ 审查（verdict=pass）。
+但我在**写契约**上踩了三个坑，全部值得记录：
+
+1. **跨工作区文件必须用「工作区相对别名」**。我把 `inScope` 写成绝对路径
+   `C:\Users\20549\.dsh\plugins\dsh-auto-translate\scripts\status.ps1`，而它在会话工作区之外 →
+   `dsh-agent-teams/lib/quality-gates.js` 的 `normalizeWorkspacePath()` 对绝对路径返回 `undefined`
+   → 判 `illegal`；`pathMatchesScope()` 对盘符开头的模式恒 `false` → 任何相对 changedPath 都判 `undeclared`。
+   **完成时强制每个 changedPath 属于 in_scope ⇒ 任务结构上不可能 completed**（t1 因此 failed，代码没问题）。
+   正确姿势：`inScope: ["scripts/status.ps1"]` + 在 objective 里注明真实物理位置；提交 changedPaths 用同一别名。
+   - `amend_task` 对**已 terminal（failed）**的任务会被拒（`terminal contracts are immutable`），
+     补救办法是**新建一个契约正确的任务**，再用 `edit_plan update_task` 把下游依赖原子改指过去。
+2. **verify 命令必须在本机能字面执行**。我写了 `pwsh -NoProfile -Command …`，但本机**不存在 PowerShell 7**
+   （`Get-Command pwsh` 未命中；Program Files / Program Files (x86) / WindowsApps 三个标准位置都没有），
+   只有 Windows PowerShell 5.1 Desktop。用 `powershell.exe` 重写即可。
+   另注意：`status.ps1` 在子进程 PATH 无 `dsh` 时会在 `& dsh plugin --profile web list` 抛错并**中止整个 Get-Status**
+   （既有行为），所以 verify 里要显式前置 dsh 的 `.bin`：`node_modules\.bin`。
+3. **`amend_task` 只传部分字段时，其余字段会被默认值覆盖**。我第二次只传 `verify` 去改 t3，结果它的
+   审查专用 objective 被替换成通用文案 `Review whether the latest implementation satisfies the user goal`，
+   且「必须给出 verdict」这条验收丢失。补救：用**完整 objective + acceptance** 再 amend 一次（t3 现有 2 条修订记录）。
+   **教训：amend 要么给全字段，要么别用。**
+
+其他观察：
+- 成员 `reasoning_effort` **一旦批准就不能改**（运行中团队只允许改未开始任务的依赖），小任务应预先用 low。
+- 小任务用 AgentTeams 是**亏的**：三层串行（实现→独立验证→独立审查）把 30 秒的活拉成十几分钟；
+  它的价值在**大任务或高风险改动**上（防止一个 Agent 自说自话）。本次是冒烟测试，所以值得。
+- 质量门**不放水**：t1 因契约非法被判 failed 并带结构化 finding，而不是凑合算过——这是可信度来源。
+
+### 已知待修（低危，验证者发现并被我复现）
+
+`status.ps1` 的 npm 查询判定：npm 在 E404 / registry 不可达时会把 `{"error":{…}}` 写到 **stdout**，
+而 L102 只用 `$raw -match '\{'` 判定成功 → 误判 `npm.ok = $true`、`version` 为空，
+于是失败场景显示成 `differs from npm  (order not comparable)`（双空格）而非
+`cannot compare: … (registry query failed)`。**非静默、不影响验收**，但应收紧为
+`-not $meta.error -and $meta.version`（`cannot compare` 分支已存在，只是进不去）。
+
+
 ## 随时查看状态（三个入口）
 
 - 桌面快捷方式：**`dsh-translate 状态面板`**（交互式控制台，`-NoExit` 所以不会闪退）与

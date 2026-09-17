@@ -2,6 +2,39 @@
 
 > dsh web 重启或上下文压缩之后，先读这个文件即可继续工作。
 
+## 上下文自动压缩（2026-09-17 调整）
+
+**这是 dsh 内置能力，不是插件**：`@deepseek-ai/dsh-base` 的 84 个依赖里已含
+`dsh-compaction-basic`（token-meter 驱动的策略 + LLM 摘要后端）、`dsh-compaction-tool-result-pruner`
+（无需模型的 head/middle/tail 修剪）、`dsh-spill-policy`/`dsh-spill-local`（超大输出移出上下文落盘）、
+`dsh-output-retention`、`dsh-token-meter`、`dsh-command-compact`（即 `/compact` 手动触发）。
+
+- **触发阈值**：`DEFAULT_THRESHOLD_RATIO = .8` → 上下文用到 **80%** 自动压缩；
+  **压缩后只保留最近 16% 原文**（`DEFAULT_RETAIN_RATIO = .16`），其余由模型总结成结构化 checkpoint。
+- 摘要提示词要求：preserve still-true facts、drop stale ones、保住文件路径/命令/错误串/标识符。
+- **原始日志无损落盘**：`~/.dsh/sessions/<工作区>/<sessionId>/session.v3.jsonl.zstd`（压缩后仍在）。
+- 可配置字段（`dsh-compaction-basic` 的 Config）：`thresholdRatio`、`retainRatio`、`retainTokens`、
+  `summarizationProvider`、`summarizationModel`、`maxTokens`、`compactionRetries`、`maxOverflowRetries`、
+  `modelPolicies`、`auto`（**缺省即 true**，不写不会关掉自动压缩）。
+- **本机已调整为 0.7**（更早触发，留更多余量）：写在 `~/.dsh/profiles/web/cordis.patch.yml`。
+
+### corpus patch 语义（踩过的坑，务必记住）
+
+`dsh-app-boot/lib/index.js` 的 `applyPatches` 规则：
+
+    const { id, insert, name, ...overrides } = patch;
+    if (insert) { ...新增一行... }                  // 对已存在的 id 用 insert → "duplicate loader entry id" → 启动失败
+    const target = entryMap.get(id);                 // 不带 insert = 按 id 定位既有行
+    if (name && name !== target.name) { 跳过并警告 }  // name 只用于校验
+    for (const [k, v] of Object.entries(overrides)) target[k] = v   // 顶层 key 直接覆盖
+
+- **覆盖既有行：不要写 `insert:`**，直接 `- id: <行id>` + `name:`（校验）+ 顶层 `config:`。
+- **`config` 是整体替换，不是深合并** → 覆盖前先确认原行有没有 config；有就得把完整配置抄一遍。
+- 行 id 取自 `dsh-base` 的 patch（例如 `compaction-basic`、`spill-policy`、`tool-result-pruner`）。
+- **验证方法（务必照做）**：改完 patch 先用**临时端口起一次**再重启生产——
+  `node <rc2>/node_modules/@deepseek-ai/dsh/lib/bin.js web --port 0 --no-open`
+  写错会立刻以 `duplicate loader entry id` 或 `entry not found` 拒启；**直接重启生产会让服务起不来**。
+
 ## 当前版本
 
 - 版本 0.2.2 ｜ 本地 git 仓库（`git log --oneline -1` 看最新提交）

@@ -157,6 +157,17 @@ test('悬停路径必须有界：本机翻译超时保护 + 会话上限 + busy 
   assert.match(host[1], /finally \{ hoverBusy = false; \}/, 'hoverBusy 必须在 finally 中释放')
 })
 
+test('本机路径失败必须优雅回退到在线并触发预热（切换引擎后不能「悬停没反应」）', () => {
+  const src = read('client.js')
+  const now = src.match(/async function translateNodeNow\(node\) \{([\s\S]*?)\n\t\t\}/)
+  assert.ok(now, '应能找到 translateNodeNow')
+  const body = now[1]
+  assert.match(body, /if \(!out && realMode === 'local'\)/, '本机失败后必须有回退分支')
+  assert.match(body, /translateLong\(onlineTranslate/, '回退分支必须真正调用在线翻译')
+  assert.match(body, /warmLocal\(\)/, '回退时必须触发本机模型预热')
+  assert.match(body, /stats\.fellBack\+\+/, '回退成功应计入 fellBack')
+})
+
 test('清空译文记录必须走 resetTranslationState()，且同时清掉 data-dsh-at 标记', () => {
   const src = read('client.js')
   // 1) 不允许任何地方再手写这三件套（漏掉 DOM 标记就会让悬停静默失效）

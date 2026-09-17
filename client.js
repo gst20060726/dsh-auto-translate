@@ -938,6 +938,15 @@ window.__ModuleLoader__.load({
 					else out = await withTimeout(translateText(text, src, tgt), 20000, '翻译');
 				}
 				catch (e) { out = null; stats.failed++; lastError = String(e && e.message ? e.message : e); }
+				// 本机路径失败/超时时的优雅回退：不要让用户「悬停了却什么都没有」。
+				// 同时触发预热，让下次悬停走本机（零成本）。
+				if (!out && realMode === 'local') {
+					if (!localWarm && !localWarming) { try { warmLocal(); } catch (e2) { } }
+					try {
+						out = await withTimeout(translateLong(onlineTranslate, text, src, tgt, 480), 12000, '在线回退');
+						if (out) { stats.fellBack++; lastError = ''; if (statusEl) statusEl.textContent = '本机模型未就绪，本次先用在线引擎翻译（正在后台预热本机模型…）'; }
+					} catch (e3) { /* 在线也不可用：保留本机那条更具体的错误信息 */ }
+				}
 				if (out) cacheSet(key, out);
 			}
 			if (!out || out === text) { processed.add(node); return false; }

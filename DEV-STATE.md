@@ -33,6 +33,41 @@
 | 重启脚本 | `C:/Users/20549/.dsh/restart-dsh-web.ps1` |
 | 保险重启（SHA 比对，幂等） | `C:/Users/20549/.dsh/restart-guard.ps1` |
 
+## dsh 本体：已升到 0.1.5-rc.2（2026-09-17）
+
+- 运行路径：`C:\Users\20549\AppData\Local\npm-cache\_npx\dsh-0.1.5-rc.2\node_modules\@deepseek-ai\dsh\lib\bin.js`
+- 原 rc.1 安装**保持不动**（`_npx\1e7f6d9597241db0`），随时可回滚。
+- 升级动机：`Lum1104/dsh-browser` 的桥接插件 pin 了最低 `0.1.5-rc.2`（README 明说 older releases are not supported）。
+- rc.1 → rc.2 的差异很小：依赖数同为 72，无增删，仅 65 个 `@deepseek-ai/*` 从 `^0.1.5-rc.1` 抬到 `^0.1.5-rc.2`；bin/engines 结构不变。
+- **已知兼容风险**：`@nanmicoder/dsh-agent-teams` 与 `dsh-vision-router` 的 peer 只声明到 `0.1.5-rc.1`。
+  两个 peer 都是 optional（不会拒绝加载），但运行时未验证。异常时的回滚见下。
+
+### 重启脚本的两个坑（都已修）
+
+1. **必须「子进程优先」杀**：脚本原来按命令行匹配杀进程，会先杀 npx 包装进程；它 spawn 的
+   `bin.js web` 子进程会被 Windows 孤立并**继续持有 3080**，造成「重启后端口没释放」的假失败。
+   现改为：先按端口反查 owner，再按命令行匹配，**降序 + 最多 3 轮重试**。
+2. **别用宽条件批量杀进程**：我曾用「命令行含 dsh」的条件清理残留，**误杀了 dsh 内部的
+   `subprocess-local` Job runner**，导致之后所有终端命令报
+   `subprocess-local: Windows Job runner exited with exit code 4294967295`（执行器彻底失效）。
+   正确做法是**只按端口反查 owner PID** 精确清理。
+
+### 回滚 rc.2 → rc.1
+
+    Copy-Item "$env:USERPROFILE\.dsh\restart-dsh-web.ps1.bak-before-rc2" "$env:USERPROFILE\.dsh\restart-dsh-web.ps1" -Force
+    # 再跑重启脚本（或先按端口杀掉 3080 的 owner）
+
+## dsh-browser（浏览器桥接 + Chrome/Edge 扩展，2026-09-17 安装）
+
+- 桥接插件：`@yuxianglin/dsh-bridge-browser@0.0.5`，junction 指向 `profiles/web/.dsh-browser-source`，已在 profile bundles 第 18 项。
+- 扩展产物：`~/.dsh/browser-extension`（`manifest.json` v0.1.4 + `background.js` + `content.js` + `panel/`）。
+- 安装方式：从**已审过的本地 tarball** 跑 `scripts/install.ps1`（**不要**用官方的 `irm … | powershell`，
+  且 `raw.githubusercontent.com` 在本机不可达）。脚本退出码 0，4 步全过。
+- **扩展权限（必须知情）**：`host_permissions: http://*/* https://*/*` + `scripting` + `tabs` + `webNavigation`
+  = 可读写你访问的所有网页；**未声明 `nativeMessaging`**（不能直接调用本机可执行文件，只能走本机回环 HTTP）。
+- 加载方式：因为没有 Chrome，脚本未能自动打开。用 Edge：`edge://extensions` → 开发人员模式 →
+  加载解压缩的扩展 → 选 `C:\Users\20549\.dsh\browser-extension`。若 Edge 的侧边栏 API 与 Chrome 不兼容，需另议。
+
 ## 随时查看状态（三个入口）
 
 - 桌面快捷方式：**`dsh-translate 状态面板`**（交互式控制台，`-NoExit` 所以不会闪退）与

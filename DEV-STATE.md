@@ -35,12 +35,19 @@
 
 ## dsh 本体：已升到 0.1.5-rc.2（2026-09-17）
 
-- 运行路径：`C:\Users\20549\AppData\Local\npm-cache\_npx\dsh-0.1.5-rc.2\node_modules\@deepseek-ai\dsh\lib\bin.js`
+- 运行路径（**已搬迁到稳定目录**）：`C:\Users\20549\.dsh\dsh-app\0.1.5-rc.2\node_modules\@deepseek-ai\dsh\lib\bin.js`
+  - 搬迁原因：原路径在 npx 缓存里，会被 npx 自动清理、且路径带哈希不可维护。搬迁是**同目录复制**，
+    模块解析路径不变（实测启动成功并加载全部插件）。
+  - `restart-dsh-web.ps1` 已指向稳定目录（备份 `restart-dsh-web.ps1.bak-before-stable`）。
 - 原 rc.1 安装**保持不动**（`_npx\1e7f6d9597241db0`），随时可回滚。
 - 升级动机：`Lum1104/dsh-browser` 的桥接插件 pin 了最低 `0.1.5-rc.2`（README 明说 older releases are not supported）。
 - rc.1 → rc.2 的差异很小：依赖数同为 72，无增删，仅 65 个 `@deepseek-ai/*` 从 `^0.1.5-rc.1` 抬到 `^0.1.5-rc.2`；bin/engines 结构不变。
-- **已知兼容风险**：`@nanmicoder/dsh-agent-teams` 与 `dsh-vision-router` 的 peer 只声明到 `0.1.5-rc.1`。
-  两个 peer 都是 optional（不会拒绝加载），但运行时未验证。异常时的回滚见下。
+- **兼容性实测结论（重要）**：`@nanmicoder/dsh-agent-teams` 在 rc.2 上**官方不支持**——它自带的
+  `scripts/doctor.mjs` 直接报 `FAIL: Unsupported host 0.1.5-rc.2; recommended target is 0.1.5-rc.1`
+  （`compatibility.json` 的 supportedHosts 只有 0.1.5-rc.1 / 0.1.2-rc.1 / 0.1.2-alpha.5 / 0.1.2-alpha.2）。
+  **但工具确实注册且可调用**（`agent_teams_status` 正常响应），所以属于「能跑但不在支持矩阵内」。
+  `dsh-vision-router` 的 peer 也只列到 rc.1，但视口工具在本机实测可用。
+  出古怪行为时第一嫌疑就是版本不匹配，回滚见下。
 
 ### 重启脚本的两个坑（都已修）
 
@@ -55,7 +62,29 @@
 ### 回滚 rc.2 → rc.1
 
     Copy-Item "$env:USERPROFILE\.dsh\restart-dsh-web.ps1.bak-before-rc2" "$env:USERPROFILE\.dsh\restart-dsh-web.ps1" -Force
-    # 再跑重启脚本（或先按端口杀掉 3080 的 owner）
+    # 再跑重启脚本（或先按端口杀掉 3080 的 owner PID）
+
+### 桌面入口与本地化决策（2026-09-17）
+
+- **不做全局安装**（`npm i -g`）：会改变模块解析根，有让 18 个 link 在 profile 的插件集体找不到依赖的风险。
+  改为**把安装搬到稳定目录** `~\.dsh\dsh-app\0.1.5-rc.2`（同目录复制、零解析风险、实测可启动）。
+- **桌面快捷方式**：`★ DSH 主界面（双击进入）.lnk` → Edge 打开
+  `http://127.0.0.1:3080/?token=<token>`。**必须带 token**（不带返回 401）。
+  - token **不写盘**，也不转 Cookie，每次启动打印在 `dsh-web-server.log` 的 `dsh web: http://…?token=` 行。
+  - 取新 token：`Get-Content "$env:USERPROFILE\.dsh\dsh-web-server.log" | Select-String 'token=' | Select-Object -Last 1`
+  - 改快捷方式：右键 `.lnk` → 属性 → 改目标 URL 的 token 段。
+  - **`msedge.exe --app=<url>` 在本机无效**：Edge 已在运行时会把 `--app` 路由到现有实例、当标签页塞进已有窗口
+    （进程里查不到独立 `--app` 窗口）。要真独立窗口必须加**专用 `--user-data-dir`**，代价是不共享登录态。
+
+## AgentTeams（协作插件）用法与版本警告
+
+- 触发方式：自然语言（「用 AgentTeams 做 X」）、`/agent-teams <目标>`、或直接调用 `agent_teams_*` 工具。
+- 界面入口：团队运行时**活动面板出现在对话里**（分段进度、成员树、任务 DAG），**不在设置页**。
+- 状态落盘：`<会话工作区>/.agent-teams/<teamId>/`（`team.json` + 各成员 `inbox/*.jsonl`）。
+- 审核流程：`agent_teams_create({approval:"required"})` 只落盘可编辑草案（不建子会话、不领任务）→
+  用户在 Web 界面编辑/批准 → 调度器才派发。**Captain 不得在同一轮自行批准。**
+- ⚠️ **版本**：该插件官方只支持到 `0.1.5-rc.1`，本机是 rc.2（见上）。doctor 报 FAIL 但工具可用。
+
 
 ## dsh-browser（浏览器桥接 + Chrome/Edge 扩展，2026-09-17 安装）
 

@@ -127,13 +127,17 @@
   它的价值在**大任务或高风险改动**上（防止一个 Agent 自说自话）。本次是冒烟测试，所以值得。
 - 质量门**不放水**：t1 因契约非法被判 failed 并带结构化 finding，而不是凑合算过——这是可信度来源。
 
-### 已知待修（低危，验证者发现并被我复现）
+### 已修（低危，验证者发现 → 复现确认 → 修复）
 
 `status.ps1` 的 npm 查询判定：npm 在 E404 / registry 不可达时会把 `{"error":{…}}` 写到 **stdout**，
-而 L102 只用 `$raw -match '\{'` 判定成功 → 误判 `npm.ok = $true`、`version` 为空，
+而判定只用 `$raw -match '\{'` → 误判 `npm.ok = $true`、`version` 为空，
 于是失败场景显示成 `differs from npm  (order not comparable)`（双空格）而非
-`cannot compare: … (registry query failed)`。**非静默、不影响验收**，但应收紧为
-`-not $meta.error -and $meta.version`（`cannot compare` 分支已存在，只是进不去）。
+`cannot compare: … (registry query failed)`。**非静默、不影响验收**。
+
+修复：在 `$meta` 解析后补一层判定——`if ($meta -and (-not $meta.version)) { $meta = $null; ... }`，
+即「没有 version 就不算查询成功」。实测：模拟 npm 输出 error JSON 时现在正确渲染
+`[!] cannot compare: local … vs npm (registry query failed)`；正常场景仍渲染 sync 行；
+0 非 ASCII / 无 BOM / 纯 LF / PS 5.1 解析 0 错误 / 27 项测试全绿。
 
 
 ## 随时查看状态（三个入口）

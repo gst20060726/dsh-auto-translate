@@ -105,6 +105,13 @@ function Get-Status {
     $err = (($raw -split "`n") | Where-Object { $_ } | Select-Object -First 1)
     if (-not $err) { $err = 'query returned nothing' }
   }
+  # npm writes an error object ({"error":{...}}) to STDOUT on E404 or an unreachable
+  # registry, so the '{' probe alone is not proof of success. Treat a missing version
+  # as a failed query as well, otherwise the drift line falls into the wrong branch.
+  if ($meta -and (-not $meta.version)) {
+    $meta = $null
+    if (-not $err) { $err = 'registry returned no version (see npm error output)' }
+  }
   if ($meta) {
     $out.npm = [ordered]@{
       ok = $true; version = $meta.version; shasum = $meta.dist.shasum

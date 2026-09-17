@@ -295,3 +295,45 @@ test('E2E 悬停模式: 加载后不自动翻译任何内容，悬停后才翻�
     window.close()
   }
 })
+
+test('E2E: 页面重渲染后可摘掉死记录（还原不再被死节点拖住）', { skip }, async () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><body><div id="a"><p id="p1">Hello world, this needs translation.</p><p id="p2">Another sentence for translation.</p></div></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true },
+  )
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      version: 4, engine: 'local', target: 'zh', latinSource: 'en',
+      minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
+    }))
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const p1 = window.document.getElementById('p1')
+    const p2 = window.document.getElementById('p2')
+    const mod = loadClientInto(window)
+    mod.apply({})
+
+    // 两句都被翻译
+    assert.ok(await waitFor(() => /ZH</.test(p1.firstChild.nodeValue) && /ZH</.test(p2.firstChild.nodeValue), 5000),
+      '两句都应被翻译')
+
+    // 模拟重渲染：整块替换掉 p1（它上面的记录随之变成死记录）
+    const fresh = window.document.createElement('p')
+    fresh.id = 'p1'
+    fresh.textContent = 'Hello world, this needs translation.'
+    p1.parentNode.replaceChild(fresh, p1)
+
+    // 记录卫生必须能摘掉死记录
+    const dropped = mod.__test.pruneDeadRecords()
+    assert.ok(dropped >= 1, '应至少摘掉 1 条死记录，实际 ' + dropped)
+
+    // 剩下的记录仍然可还原
+    const restored = mod.__test.revertTranslatedNodes()
+    assert.ok(restored >= 1, '剩余记录仍应能被还原，实际 ' + restored)
+    assert.equal(p2.firstChild.nodeValue, 'Another sentence for translation.', 'p2 应回到原文')
+  } finally {
+    window.close()
+  }
+})

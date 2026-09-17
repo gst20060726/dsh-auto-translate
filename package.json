@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-translate",
-  "version": "0.2.9",
+  "version": "0.2.2",
   "description": "Zero-token auto-translation for the DeepSeek Harness web GUI: on-device WASM translation of foreign text in place, with hover to toggle between the original and the translation.",
   "type": "module",
   "main": "./index.js",

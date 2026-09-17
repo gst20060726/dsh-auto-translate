@@ -895,7 +895,13 @@ window.__ModuleLoader__.load({
 						noteOnlineResult(!!out);
 						if (onlinePaused()) { updateStatus(); break; }   // 进入退避：停止消耗队列
 					}
-					if (!out || out === text) { processed.add(node); updateStatus(); continue; }
+					if (!out || out === text) {
+						processed.add(node);
+						// 不要把「没翻出东西」做成静默：至少让状态行说明原因，否则用户只看到页面没变
+						if (!out && !lastError) lastError = '这一句没有返回译文（可能被引擎跳过或额度受限）';
+						updateStatus();
+						continue;
+					}
 					var lead = text.match(/^\s*/)[0];
 					var tail = text.match(/\s*$/)[0];
 					var rec = { node: node, original: text, translated: lead + out + tail, showingOriginal: false };
@@ -911,6 +917,8 @@ window.__ModuleLoader__.load({
 				}
 			} finally {
 				working = false;
+				// 每轮收尾做一次记录卫生：页面重渲染后摘掉死记录，避免内存与状态缓慢漂移
+				if (records.length > 200) { try { pruneDeadRecords(); } catch (e) { } }
 				updateStatus();
 				if (queue.length) schedule();
 			}
@@ -918,6 +926,28 @@ window.__ModuleLoader__.load({
 
 		// ===================== 悬停切换原文/译文 =====================
 		var hoverHost = null, hoverTimer = null, toggledHost = null;
+
+		// ---------- 记录卫生 ----------
+		// 页面重渲染（React 换节点 / 流式消息被替换）会让 records 里累积已断开的节点：
+		// 既白占内存，又让「还原原文」看起来失效（其实那些节点早已不在页面上）。
+		// 每次清理把死记录摘掉，并同步清掉其宿主上残留的 data-dsh-at 标记。
+		function pruneDeadRecords() {
+			if (!records.length) return 0;
+			var kept = [], dropped = 0;
+			for (var i = 0; i < records.length; i++) {
+				var r = records[i];
+				if (r.node && r.node.isConnected) { kept.push(r); continue; }
+				dropped++;
+				try {
+					var h = r.node && r.node.parentElement;
+					if (h && h.getAttribute && h.getAttribute('data-dsh-at') && !h.isConnected) h.removeAttribute('data-dsh-at');
+				} catch (e) { }
+			}
+			if (!dropped) return 0;
+			records = kept;
+			translatedCount = records.length;
+			return dropped;
+		}
 
 		// ---------- 悬停翻译模式（engine === 'hover'）----------
 		// 不自动扫描全页；只有鼠标停在同一块文字上达到 hoverDelayMs 才翻译那一块，且译文保持。
@@ -1159,6 +1189,7 @@ window.__ModuleLoader__.load({
 		}
 		// 只把「当前显示着译文」的节点改回原文（不动任何状态）
 		function revertTranslatedNodes() {
+			pruneDeadRecords();   // 先摘掉页面已重渲染掉的死记录，否则「还原原文」会看起来漏掉一些块
 			var n = 0;
 			for (var i = 0; i < records.length; i++) {
 				var r = records[i];
@@ -1804,7 +1835,7 @@ window.__ModuleLoader__.load({
 				fails: function () { return onlineFails; }, clear: function () { onlineFails = 0; onlineRetryAt = 0; if (onlineRetryTimer) { clearTimeout(onlineRetryTimer); onlineRetryTimer = null; } },
 			},
 			limits: { QUEUE_MAX: QUEUE_MAX, RECORDS_MAX: RECORDS_MAX },
-			revertTranslatedNodes: revertTranslatedNodes,
+			revertTranslatedNodes: revertTranslatedNodes, pruneDeadRecords: pruneDeadRecords,
 		};
 		return module.exports;
 	}

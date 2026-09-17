@@ -157,6 +157,38 @@ test('悬停路径必须有界：本机翻译超时保护 + 会话上限 + busy 
   assert.match(host[1], /finally \{ hoverBusy = false; \}/, 'hoverBusy 必须在 finally 中释放')
 })
 
+test('在线连续失败必须指数退避（额度耗尽时不能一直硬打）', () => {
+  const { mod } = loadClient()
+  const b = mod.__test.onlineBackoff
+  assert.ok(b, '__test 应暴露 onlineBackoff')
+  // 退避曲线：2s 起，逐次翻倍，封顶 30s
+  assert.equal(b.delay(1), 2000)
+  assert.equal(b.delay(2), 4000)
+  assert.equal(b.delay(3), 8000)
+  assert.equal(b.delay(4), 16000)
+  assert.ok(b.delay(5) <= 30000, '退避必须封顶 30 秒，实际 ' + b.delay(5))
+  assert.equal(b.delay(99), 30000)
+  // 前两次失败不暂停（避免偶发抖动就停摆），第 3 次起进入退避
+  b.clear()
+  b.note(false); assert.equal(b.fails(), 1); assert.equal(b.paused(), false, '失败 1 次不应暂停')
+  b.note(false); assert.equal(b.fails(), 2); assert.equal(b.paused(), false, '失败 2 次不应暂停')
+  b.note(false); assert.equal(b.fails(), 3); assert.equal(b.paused(), true, '连续失败 3 次必须进入退避')
+  // 一次成功即清零并恢复
+  b.note(true)
+  assert.equal(b.fails(), 0, '成功后失败计数必须清零')
+  assert.equal(b.paused(), false, '成功后不得继续暂停')
+  b.clear()
+})
+
+test('resetTranslationState 必须同时清掉在线退避（用户重试要立刻再试）', () => {
+  const src = read('client.js')
+  const fn = src.match(/function resetTranslationState\(\) \{([\s\S]*?)\n\t\t\}/)
+  assert.ok(fn, '必须有 resetTranslationState()')
+  assert.match(fn[1], /onlineFails = 0/, '必须清空失败计数')
+  assert.match(fn[1], /onlineRetryAt = 0/, '必须清掉退避截止时间')
+  assert.match(fn[1], /clearTimeout\(onlineRetryTimer\)/, '必须取消待触发的重试定时器')
+})
+
 test('本机路径失败必须优雅回退到在线并触发预热（切换引擎后不能「悬停没反应」）', () => {
   const src = read('client.js')
   const now = src.match(/async function translateNodeNow\(node\) \{([\s\S]*?)\n\t\t\}/)

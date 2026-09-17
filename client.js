@@ -816,6 +816,32 @@ window.__ModuleLoader__.load({
 			} catch (e) { }
 		}
 		var scheduled = false;
+		// 在线请求连续失败的指数退避：额度耗尽 / 网络抖动时不要一直硬打（否则队列只涨不消化）
+		var onlineFails = 0, onlineRetryAt = 0, onlineRetryTimer = null;
+		function backoffDelayMs(n) { return Math.min(30000, 2000 * Math.pow(2, Math.max(0, n - 1))); }
+		function onlinePaused() { return Date.now() < onlineRetryAt; }
+		function noteOnlineResult(ok) {
+			if (ok) {
+				if (onlineFails) { onlineFails = 0; onlineRetryAt = 0; lastError = ''; }
+				return;
+			}
+			onlineFails++;
+			// 第 3 次起才开始退避，避免偶发抖动就停摆
+			if (onlineFails < 3) return;
+			var wait = backoffDelayMs(onlineFails - 2);
+			onlineRetryAt = Date.now() + wait;
+			if (onlineRetryTimer) clearTimeout(onlineRetryTimer);
+			onlineRetryTimer = setTimeout(function () {
+				onlineRetryTimer = null; onlineRetryAt = 0;
+				lastError = '';
+				pump();
+				updateStatus();
+			}, wait);
+			if (statusEl) {
+				statusEl.textContent = '在线引擎连续失败 ' + onlineFails + ' 次（额度可能已耗尽），'
+					+ Math.round(wait / 1000) + ' 秒后自动重试；建议点「下载/预热」改用本机离线（零配额）';
+			}
+		}
 		function schedule() {
 			if (scheduled) return;
 			scheduled = true;
@@ -827,6 +853,14 @@ window.__ModuleLoader__.load({
 			if (working || !settings.enabled) return;
 			if (settings.engine === 'hover') {   // 悬停模式：丢弃自动扫描残留的队列，绝不自动翻译
 				queue.length = 0; scheduled = false; updateStatus(); return;
+			}
+			// 在线退避期内不消耗队列：否则会把整批节点在失败中"跑掉"，退避结束后无内容可译
+			if (onlinePaused()) {
+				scheduled = false;
+				if (onlineRetryTimer) return;
+				var left = Math.max(500, onlineRetryAt - Date.now());
+				setTimeout(function () { scheduled = false; pump(); }, left);
+				return;
 			}
 			working = true;
 			var budget = Math.max(1, settings.maxNodes);
@@ -857,6 +891,9 @@ window.__ModuleLoader__.load({
 						try { out = await translateText(text, src, tgt); }
 						catch (e) { out = null; stats.failed++; lastError = String(e && e.message ? e.message : e); }
 						if (out) cacheSet(key, out);
+						// 成功/失败都记账：连续失败到阈值就指数退避，成功后清零
+						noteOnlineResult(!!out);
+						if (onlinePaused()) { updateStatus(); break; }   // 进入退避：停止消耗队列
 					}
 					if (!out || out === text) { processed.add(node); updateStatus(); continue; }
 					var lead = text.match(/^\s*/)[0];
@@ -1134,6 +1171,10 @@ window.__ModuleLoader__.load({
 			hoverHost = null;
 			if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
 			toggledHost = null;
+			// 清掉在线退避：用户主动重试（或换引擎）就该立刻再试一次，而不是继续等
+			onlineFails = 0;
+			onlineRetryAt = 0;
+			if (onlineRetryTimer) { clearTimeout(onlineRetryTimer); onlineRetryTimer = null; }
 			try {
 				var marked = document.querySelectorAll('[data-dsh-at]');
 				for (var k = 0; k < marked.length; k++) marked[k].removeAttribute('data-dsh-at');
@@ -1749,6 +1790,10 @@ window.__ModuleLoader__.load({
 			splitSentences: splitSentences,
 			sessionLimitActive: sessionLimitActive, sessionLimit: sessionLimit, settings: settings,
 			actualModeFor: actualModeFor, resetTranslationState: resetTranslationState, hoverHostState: hoverHostState,
+			onlineBackoff: {
+				delay: backoffDelayMs, paused: onlinePaused, note: noteOnlineResult,
+				fails: function () { return onlineFails; }, clear: function () { onlineFails = 0; onlineRetryAt = 0; if (onlineRetryTimer) { clearTimeout(onlineRetryTimer); onlineRetryTimer = null; } },
+			},
 			limits: { QUEUE_MAX: QUEUE_MAX, RECORDS_MAX: RECORDS_MAX },
 		};
 		return module.exports;

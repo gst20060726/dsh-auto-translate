@@ -1153,16 +1153,25 @@ window.__ModuleLoader__.load({
 			'· 全程不调用任何大模型,不产生 API 费用;译文按句缓存,同一句不重复翻译',
 		].join('\n');
 		function restoreAll() {
-			for (var i = 0; i < records.length; i++) {
-				var r = records[i];
-				if (r.node.isConnected && r.showingOriginal === false) { r.node.nodeValue = r.original; selfWrites.set(r.node, Date.now()); }
-			}
+			revertTranslatedNodes();
 			resetTranslationState();
 			updateStatus();
 		}
+		// 只把「当前显示着译文」的节点改回原文（不动任何状态）
+		function revertTranslatedNodes() {
+			var n = 0;
+			for (var i = 0; i < records.length; i++) {
+				var r = records[i];
+				if (r.node.isConnected && r.showingOriginal === false) { r.node.nodeValue = r.original; selfWrites.set(r.node, Date.now()); n++; }
+			}
+			return n;
+		}
 		// 丢弃所有译文记录：必须**同时**清掉页面上的 data-dsh-at 标记。
 		// 否则宿主上残留的标记会让悬停逻辑以为"这块已翻译"，而 records 已空 → 既翻不动也复原不了（静默失效）。
-		function resetTranslationState() {
+		function resetTranslationState(revertFirst) {
+			// 切换引擎/重试/重扫时，页面上可能还留着**上一个引擎**的译文；
+			// 若不先还原，那些译文会变成没有任何记录可查的"孤儿译文" —— 既不能复原也不能重新翻译。
+			if (revertFirst) revertTranslatedNodes();
 			records = [];
 			recordByNode = new WeakMap();
 			processed = new WeakSet();
@@ -1500,7 +1509,7 @@ window.__ModuleLoader__.load({
 				else if (act === 'retry') {
 					lastError = '';
 					stats.chars = 0;                 // 重试即开启新一轮会话，否则会立刻再次撞上限
-					resetTranslationState();
+					resetTranslationState(true);
 					if (!localWarm) warmLocal();
 					scanRoot(document.body, 0);
 					updateStatus();
@@ -1550,7 +1559,7 @@ window.__ModuleLoader__.load({
 						settings.engine = 'local';
 						saveSettings();
 						applySettingsToUI();
-						resetTranslationState();
+						resetTranslationState(true);
 						scanRoot(document.body, 0);
 						warmLocal();
 						updateStatus();
@@ -1566,7 +1575,7 @@ window.__ModuleLoader__.load({
 						settings.engine = 'online';
 						saveSettings();
 						applySettingsToUI();
-						resetTranslationState();
+						resetTranslationState(true);
 						scanRoot(document.body, 0);
 						updateStatus();
 					}
@@ -1586,7 +1595,7 @@ window.__ModuleLoader__.load({
 				if (key === 'enabled') { if (!settings.enabled) restoreAll(); else scanRoot(document.body, 0); }
 				if (key === 'workerMode') { resetWorker('mode-change'); }
 				if (key === 'multiMode' && localWorker && localWorker.post) { localWorker.post({ type: 'config', multiMode: settings.multiMode }); }
-				if (key === 'engine' || key === 'target' || key === 'latinSource') { resetTranslationState(); scanRoot(document.body, 0); }
+				if (key === 'engine' || key === 'target' || key === 'latinSource') { resetTranslationState(true); scanRoot(document.body, 0); }
 			});
 			applyI18n();
 			applySettingsToUI();
@@ -1795,6 +1804,7 @@ window.__ModuleLoader__.load({
 				fails: function () { return onlineFails; }, clear: function () { onlineFails = 0; onlineRetryAt = 0; if (onlineRetryTimer) { clearTimeout(onlineRetryTimer); onlineRetryTimer = null; } },
 			},
 			limits: { QUEUE_MAX: QUEUE_MAX, RECORDS_MAX: RECORDS_MAX },
+			revertTranslatedNodes: revertTranslatedNodes,
 		};
 		return module.exports;
 	}

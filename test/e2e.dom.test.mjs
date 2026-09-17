@@ -147,6 +147,40 @@ test('E2E: 流式追加的文本只在稳定后才翻译（不与追加剧烈打
   }
 })
 
+test('E2E: 切换引擎时必须先把已翻译的页面还原成原文（不留孤儿译文）', { skip }, async () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><body><div id="a"><p id="p1">Hello world, this needs translation.</p></div></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true },
+  )
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      version: 4, engine: 'local', target: 'zh', latinSource: 'en',
+      hoverDelayMs: 100, minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
+    }))
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const p1 = window.document.getElementById('p1')
+    const node = p1.firstChild
+    const original = node.nodeValue
+    const mod = loadClientInto(window)
+    mod.apply({})
+
+    // 等自动翻译把这一块翻出来
+    assert.ok(await waitFor(() => /ZH</.test(node.nodeValue), 4000), '应该自动翻译，实际: ' + JSON.stringify(node.nodeValue))
+
+    // 模拟用户切换引擎：实现里走 resetTranslationState(true)
+    mod.__test.resetTranslationState(true)
+
+    // 关键：页面必须立刻回到原文，而不是留着上一个引擎的译文（旧 bug：留着 → 无法复原）
+    assert.equal(node.nodeValue, original, '切换后必须还原成原文，实际: ' + JSON.stringify(node.nodeValue))
+    assert.equal(p1.getAttribute('data-dsh-at'), null, '切换后不得残留标记')
+  } finally {
+    window.close()
+  }
+})
+
 test('E2E 悬停模式: 切换引擎后不应留下会让悬停卡死的标记（回归）', { skip }, async () => {
   const dom = new JSDOM(
     '<!doctype html><html><body><div id="a"><p id="p1">Hello world, this needs translation.</p></div></body></html>',

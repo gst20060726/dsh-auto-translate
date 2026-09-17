@@ -182,7 +182,7 @@ test('在线连续失败必须指数退避（额度耗尽时不能一直硬打�
 
 test('resetTranslationState 必须同时清掉在线退避（用户重试要立刻再试）', () => {
   const src = read('client.js')
-  const fn = src.match(/function resetTranslationState\(\) \{([\s\S]*?)\n\t\t\}/)
+  const fn = src.match(/function resetTranslationState\(revertFirst\) \{([\s\S]*?)\n\t\t\}/)
   assert.ok(fn, '必须有 resetTranslationState()')
   assert.match(fn[1], /onlineFails = 0/, '必须清空失败计数')
   assert.match(fn[1], /onlineRetryAt = 0/, '必须清掉退避截止时间')
@@ -200,21 +200,37 @@ test('本机路径失败必须优雅回退到在线并触发预热（切换引�
   assert.match(body, /stats\.fellBack\+\+/, '回退成功应计入 fellBack')
 })
 
+test('切换引擎/目标语言前必须先把页面还原成原文（否则留下孤儿译文）', () => {
+  const src = read('client.js')
+  // resetTranslationState 必须支持「先还原」参数
+  assert.match(src, /function resetTranslationState\(revertFirst\)/, 'resetTranslationState 必须接受 revertFirst')
+  const fn = src.match(/function resetTranslationState\(revertFirst\) \{([\s\S]*?)\n\t\t\}/)
+  assert.ok(fn, '应能找到 resetTranslationState')
+  assert.match(fn[1], /if \(revertFirst\) revertTranslatedNodes\(\)/, 'revertFirst 为真时必须先还原页面文本')
+  assert.match(src, /function revertTranslatedNodes\(\)/, '必须有 revertTranslatedNodes()')
+  // 引擎/目标语言变更这条路径必须先还原
+  assert.match(src, /key === 'engine'[\s\S]{0,120}resetTranslationState\(true\)/,
+    '切换引擎/目标语言必须 resetTranslationState(true)')
+  // 至少 4 处调用带 true（设置变更 / 切本机 / 切在线 / 重试 / 重扫）
+  const trues = src.split('resetTranslationState(true)').length - 1
+  assert.ok(trues >= 4, '带还原的复位调用点应 >= 4，实际 ' + trues)
+})
+
 test('清空译文记录必须走 resetTranslationState()，且同时清掉 data-dsh-at 标记', () => {
   const src = read('client.js')
   // 1) 不允许任何地方再手写这三件套（漏掉 DOM 标记就会让悬停静默失效）
   assert.doesNotMatch(src, /records = \[\]; recordByNode = new WeakMap\(\)/,
     '不得手写 records/recordByNode/processed 三件套，必须调用 resetTranslationState()')
   // 2) 统一复位函数必须存在，且必须清 DOM 标记 + 清 processed/records + 复位悬停状态
-  const fn = src.match(/function resetTranslationState\(\) \{([\s\S]*?)\n\t\t\}/)
+  const fn = src.match(/function resetTranslationState\(revertFirst\) \{([\s\S]*?)\n\t\t\}/)
   assert.ok(fn, '必须有 resetTranslationState()')
   assert.match(fn[1], /records = \[\]/, '必须清空 records')
   assert.match(fn[1], /processed = new WeakSet\(\)/, '必须清空 processed（否则同一块无法被重新翻译）')
   assert.match(fn[1], /removeAttribute\('data-dsh-at'\)/, '必须清掉页面上的 data-dsh-at 标记')
   assert.match(fn[1], /hoverHost = null/, '必须复位悬停宿主状态')
-  // 3) 至少 4 个调用点（retry / rescan / uselocal / useonline / 设置变更）
-  const calls = src.split('resetTranslationState();').length - 1
-  assert.ok(calls >= 4, 'resetTranslationState() 调用点应 >= 4，实际 ' + calls)
+  // 3) 统一复位有足够多的调用点（retry / rescan / uselocal / useonline / 设置变更）
+  const calls = (src.split('resetTranslationState(').length - 1) - 1   // 减去函数定义本身
+  assert.ok(calls >= 5, 'resetTranslationState 调用点应 >= 5，实际 ' + calls)
 })
 
 test('悬停模式绝不自动扫描，且丢弃自动扫描残留队列', () => {

@@ -733,12 +733,14 @@ test('E2E 0.4.0: 头部模式条反映「由谁翻 + 框选方式」，且不再
     assert.ok(card, '面板应存在')
     assert.equal(card.querySelector('[data-set="engine"]'), null, '0.4.0 起不再提供「自动翻译」引擎选择器')
     assert.ok(card.querySelector('[data-set="hoverEngine"]'), '应提供「由谁翻」的后端选择器')
-    assert.equal(card.querySelectorAll('details.grp').length, 4, '常用/引擎/高级/诊断 四个可折叠分组')
+    assert.equal(card.querySelectorAll('details.grp').length, 5, '常用/触发与框选/引擎与模型/高级/诊断 五个可折叠分组')
     assert.equal(card.querySelector('details.grp[open]').getAttribute('data-grp'), 'common', '默认只展开「常用」')
 
     const line = card.querySelector('[data-el="modeText"]').textContent
-    assert.match(line, /就地替换/, '模式条应显示框选方式，实际: ' + line)
-    assert.match(mod.__test.modeText(), /本机离线/, '模式条应显示当前后端，实际: ' + mod.__test.modeText())
+    assert.match(line, /就地/, '模式条应显示框选方式，实际: ' + line)
+    assert.match(mod.__test.modeText(), /本机/, '模式条应显示当前后端（短名），实际: ' + mod.__test.modeText())
+    // 模式条必须够短：280px 宽的面板里折行会把面板顶高（真机实测 +19px）
+    assert.ok(mod.__test.modeText().length <= 26, '模式条应保持一行以内，实际 ' + mod.__test.modeText().length + ' 字: ' + mod.__test.modeText())
   } finally {
     window.close()
   }

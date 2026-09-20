@@ -1557,9 +1557,11 @@ window.__ModuleLoader__.load({
 				selFailed: '翻译失败：', selDone: '已就地替换：',
 				selInlineFallback: '选区跨了多段，已改用浮层显示',
 				badgeError: ' · 有错误',
-				groupCommon: '常用', groupEngine: '引擎与模型', groupAdvanced: '高级', groupDiag: '诊断与重置',
+				groupCommon: '常用', groupTrigger: '触发与框选', groupEngine: '引擎与模型', groupAdvanced: '高级', groupDiag: '诊断与重置',
 				collapseAll: '折叠全部', expandAll: '展开全部', slim: '窄面板',
-				triggerHint: '悬停片刻翻那一块（时长见上）；拖选文字松手即译。两者都只在你主动操作时触发。',
+				modeLine: '按需', backLocal: '本机', backOnline: '在线', backCustom: '自定义', backOnDevice: '端侧',
+				selShortPopup: '浮层', selShortInline: '就地', selShortOff: '关',
+				triggerHint: '悬停翻那一块（时长见上）；拖选松手即译。只在你主动操作时触发。',
 				translateCode: '也翻译代码/思考块(实验)', avgLatency: '平均 {ms}ms/句',
 				multiTab: '检测到 {n} 个其他标签页(译文缓存共享,内存会翻倍)',
 				workerMode: '推理实例', wmAuto: '自动(共享优先)', multiMode: '多语种策略', mmTwoHop: '两跳(省内存/快)',
@@ -1577,7 +1579,7 @@ window.__ModuleLoader__.load({
 				toggleAll: '全部原文/译文', helpBtn: '使用指南', lang: '语言', langAuto: '自动',
 				engineHover: '悬停翻译(不自动翻)', engineAuto: '自动(本机→端侧→在线)', engineLocal: '本机离线(小模型)', engineOnDevice: '端侧仅',
 				engineOnline: '在线免密钥', engineCustom: '自定义端点', engineOff: '关闭',
-				footerHint: '悬停 0.6 秒翻译鼠标下那一块；**再次停留同一块**即复原为原文，可反复切换（默认模式）。Alt+悬停可立即触发。快捷键（可改键）：Ctrl+Alt+T 呼出面板 · Ctrl+Alt+H 显示/隐藏圆点 · Ctrl+Alt+P 暂停/恢复。全程不调用大模型。',
+				footerHint: 'Ctrl+Alt+T 面板 · +H 圆点 · +P 暂停（「高级」可改键，详情见「使用指南」）',
 				stEngine: '引擎', stOnDevOk: ' · 端侧可用', stOnDevNo: ' · 端侧不可用',
 				stSegTranslated: '已译 {n} 处', stSegFailed: '失败 {n}', stSegQueued: '队列 {n}', stSegScanned: '扫描 {n}',
 				stSegSkippedLang: '非目标语言 {n}', stSegFallback: '回退在线 {n}', stSegCache: '译文缓存 {n}',
@@ -1611,8 +1613,10 @@ window.__ModuleLoader__.load({
 				selFailed: 'Translation failed: ', selDone: 'Replaced in place: ',
 				selInlineFallback: 'Selection spans several blocks — shown in the floating panel instead',
 				badgeError: ' · error',
-				groupCommon: 'Common', groupEngine: 'Engine & model', groupAdvanced: 'Advanced', groupDiag: 'Diagnostics & reset',
+				groupCommon: 'Common', groupTrigger: 'Trigger & selection', groupEngine: 'Engine & model', groupAdvanced: 'Advanced', groupDiag: 'Diagnostics & reset',
 				collapseAll: 'Collapse all', expandAll: 'Expand all', slim: 'Narrow',
+				modeLine: 'On demand', backLocal: 'local', backOnline: 'online', backCustom: 'custom', backOnDevice: 'built-in',
+				selShortPopup: 'popup', selShortInline: 'in place', selShortOff: 'off',
 				triggerHint: 'Hover a block to translate it (delay above); drag-select text and release to translate it. Both fire only on your action.',
 				translateCode: 'Also translate code/thinking blocks (experimental)', avgLatency: 'avg {ms}ms/sentence',
 				multiTab: '{n} other tab(s) detected (translation cache shared, memory doubles)',
@@ -1631,7 +1635,7 @@ window.__ModuleLoader__.load({
 				toggleAll: 'All original/translated', helpBtn: 'Guide', lang: 'Language', langAuto: 'Auto',
 				engineHover: 'Hover to translate (no auto)', engineAuto: 'Auto (local → built-in → online)', engineLocal: 'On-device (small model)', engineOnDevice: 'Built-in only',
 				engineOnline: 'Online keyless', engineCustom: 'Custom endpoint', engineOff: 'Off',
-				footerHint: 'Hover a block for ~0.6s to translate it; hover the SAME block again to restore the original — repeats forever (default mode). Alt+hover triggers instantly. Hotkeys (rebindable): Ctrl+Alt+T panel · Ctrl+Alt+H chip · Ctrl+Alt+P pause. No LLM is ever called.',
+				footerHint: 'Ctrl+Alt+T panel · +H chip · +P pause (rebindable in Advanced; see the Guide)',
 				stEngine: 'Engine', stOnDevOk: ' · built-in available', stOnDevNo: ' · built-in unavailable',
 				stSegTranslated: '{n} translated', stSegFailed: '{n} failed', stSegQueued: '{n} queued', stSegScanned: '{n} scanned',
 				stSegSkippedLang: '{n} not target language', stSegFallback: '{n} fell back online', stSegCache: '{n} cached',
@@ -1697,11 +1701,12 @@ window.__ModuleLoader__.load({
 		// ===================== 控制面板（Shadow DOM，避免被自身翻译） =====================
 		var statusEl = null, cardEl = null, chipEl = null;
 		// 头部模式条：一眼看清「怎么触发 + 由谁翻 + 当前是否在翻」
+		// 用短词是有意的：面板只有 280px，长句会折行把面板顶高（实测折行 +19px、面板因此要滚动）
 		function modeText() {
-			var backName = { local: t('engineLocal'), online: t('engineOnline'), custom: t('engineCustom'), ondevice: t('engineOnDevice') }[settings.hoverEngine] || t('engineLocal');
-			var selName = settings.selectionMode === 'inline' ? t('selInline') : (settings.selectionMode === 'off' ? t('selOff') : t('selPopup'));
+			var backName = { local: t('backLocal'), online: t('backOnline'), custom: t('backCustom'), ondevice: t('backOnDevice') }[settings.hoverEngine] || t('backLocal');
+			var selName = settings.selectionMode === 'inline' ? t('selShortInline') : (settings.selectionMode === 'off' ? t('selShortOff') : t('selShortPopup'));
 			var state = !settings.enabled ? t('stPaused') : (lastError ? t('badgeError') : '');
-			return t('engineHover') + ' · ' + backName + ' · ' + t('selectionMode') + ': ' + selName + state;
+			return t('modeLine') + ' · ' + backName + ' · ' + t('selectionMode') + ':' + selName + state;
 		}
 		function updateModeLine() {
 			if (!cardEl) return;
@@ -1817,9 +1822,10 @@ window.__ModuleLoader__.load({
 				+ '.card{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.22) transparent;scrollbar-gutter:stable}'
 				+ '.help{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.22) transparent}'
 				+ '.errbox{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.22) transparent}'
-				+ '.hdr{position:sticky;top:0;z-index:3;background:rgba(20,22,28,.97);margin:-2px 0 6px;padding:2px 0}'
+				+ '.hdr{position:sticky;top:0;z-index:3;background:rgba(20,22,28,.97);margin:-2px 0 4px;padding:1px 0}'
 				+ '.grow{flex:1}'
-				+ 'button.mini{padding:1px 6px;font-size:11px;opacity:.72}'
+				+ 'button.mini{padding:1px 5px;font-size:10.5px;opacity:.72}'
+				+ '.hdr button{padding:2px 7px}'
 				+ 'button.mini:hover{opacity:1}'
 				+ '.modeline{display:flex;gap:6px;align-items:center;background:#111318;border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:5px 7px;font-size:11.5px;margin:0 0 6px}'
 				+ 'details.grp{border:1px solid rgba(255,255,255,.12);border-radius:8px;margin:6px 0;padding:0 8px;background:rgba(255,255,255,.02)}'
@@ -1849,11 +1855,12 @@ window.__ModuleLoader__.load({
 				+ '<div class="row"><label data-i18n="enabled"></label><input type="checkbox" data-set="enabled"></div>'
 				+ '<div class="row"><label data-i18n="engine"></label><select data-set="hoverEngine"><option value="local" data-i18n="engineLocal"></option><option value="online" data-i18n="engineOnline"></option><option value="custom" data-i18n="engineCustom"></option></select></div>'
 				+ '<div class="row"><label data-i18n="target"></label><select data-set="target"></select></div>'
-				+ '<div class="row"><label data-i18n="hoverDelay"></label><input type="number" min="0" max="5000" step="100" data-set="hoverDelayMs" style="width:80px"></div>'
 				+ '<div class="row"><label data-i18n="selectionMode"></label><select data-set="selectionMode"><option value="popup" data-i18n="selPopup"></option><option value="inline" data-i18n="selInline"></option><option value="off" data-i18n="selOff"></option></select></div>'
+				+ '</details>'
+				+ '<details class="grp" data-grp="trigger"><summary data-i18n="groupTrigger"></summary>'
+				+ '<div class="row"><label data-i18n="hoverDelay"></label><input type="number" min="0" max="5000" step="100" data-set="hoverDelayMs" style="width:80px"></div>'
 				+ '<div class="row"><label data-i18n="selectionMinChars"></label><input type="number" min="1" max="500" step="1" data-set="selectionMinChars" style="width:70px"></div>'
 				+ '<div class="row"><label data-i18n="selMaxChars"></label><input type="number" min="0" step="500" data-set="selMaxChars" style="width:80px"></div>'
-				+ '<div class="row"><label data-i18n="lang"></label><select data-set="lang"><option value="auto" data-i18n="langAuto"></option><option value="zh">中文</option><option value="en">English</option></select></div>'
 				+ '<div class="hint" data-i18n="triggerHint"></div>'
 				+ '</details>'
 				+ '<details class="grp" data-grp="engine"><summary data-i18n="groupEngine"></summary>'
@@ -1869,6 +1876,7 @@ window.__ModuleLoader__.load({
 				+ '<div class="row"><label data-i18n="latinSource"></label><select data-set="latinSource"></select></div>'
 				+ '</details>'
 				+ '<details class="grp" data-grp="advanced"><summary data-i18n="groupAdvanced"></summary>'
+				+ '<div class="row"><label data-i18n="lang"></label><select data-set="lang"><option value="auto" data-i18n="langAuto"></option><option value="zh">中文</option><option value="en">English</option></select></div>'
 				+ '<div class="row"><label data-i18n="summonPanel"></label><button data-act="rebindSummon"><span data-el="hkSummon"></span> <span data-i18n="rebind"></span></button><button data-act="summon" data-i18n="summon"></button></div>'
 				+ '<div class="row"><label data-i18n="toggleChip"></label><button data-act="rebindHide"><span data-el="hkHide"></span> <span data-i18n="rebind"></span></button></div>'
 				+ '<div class="row"><label data-i18n="pauseRow"></label><button data-act="rebindPause"><span data-el="hkPause"></span> <span data-i18n="rebind"></span></button></div>'

@@ -3,7 +3,7 @@
 > 给 DeepSeek Harness Web GUI 的**零 token 按需翻译**插件：**不会自动翻译整页**，
 > 鼠标悬停某一块约 0.6 秒才翻译那一块（再停一次换回原文），或拖选一段文字松手即译。
 
-![version](https://img.shields.io/badge/version-0.4.1-blue)
+![version](https://img.shields.io/badge/version-0.4.2-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
 ---
@@ -67,7 +67,7 @@
 > **不会自动翻译整页** —— 这是 0.4.0 起的刻意设计：只有上面这些主动操作才会触发翻译，
 > 其余时间插件完全不碰页面，因此不会把你正在读/正在输入的界面改掉。
 
-面板按「常用 / 引擎与模型 / 高级 / 诊断与重置」**分组折叠**（默认只展开「常用」，顶部可一键展开/折叠全部，
+面板按「常用 / 触发与框选 / 引擎与模型 / 高级 / 诊断与重置」**分组折叠**（默认只展开「常用」，顶部可一键展开/折叠全部，
 还能切「窄面板」）。面板里还有：目标语言、悬停延迟、**由谁翻**（本机离线 / 在线免密钥 / 自定义端点）、
 框选方式、最少选取字数、**框选上限（0 = 不限）**、在线端点、拉丁源语言、**下载/预热**、**切到本机**、
 重试、全部原文/译文、还原原文、清缓存、使用指南、保存/复制诊断。
@@ -125,10 +125,20 @@
     |   |- transformers.esm.v2.js  # transformers.js 浏览器 ESM（ORT 引用已指向本地）
     |   |- ort/              # ONNX Runtime 的 wasm 与加载器
     |- scripts/fetch-vendor.mjs    # 重新生成 vendor/（仓库可不带大文件）
+    |- scripts/verify-browser.mjs  # 真浏览器验收（可选，见下）
     |- package.json / cordis.patch.yml
 
 - 宿主半只做三件事：`/dsh-auto-translate/vendor/*`（静态）、`/model-v2/*`（模型代理+缓存）、`/diag`（诊断落盘）。
 - 浏览器半不注册工具、不调用模型；推理全在 Worker 中，主线程只做文本替换。
+
+### 改代码后怎么验
+
+    npm test                  # 46 项：契约 + i18n + jsdom E2E（不需要浏览器）
+    npm run verify:browser    # 真浏览器：面板真实布局/是否滚动/是否裁字 + 真实鼠标悬停与框选
+
+`verify:browser` 用你本机的 Edge/Chrome 起**独立临时 profile**（不碰你在用的浏览器数据），需要 `puppeteer-core`
+（DSH 配置目录里通常已有）。它专治 jsdom 测不出的问题：**没有布局引擎就发现不了「面板装不下要滚动」「文字被裁」**。
+输出截图 `panel-preview.png` 与 JSON 报告，任一项不通过就以非 0 退出。
 
 ## 兼容性
 

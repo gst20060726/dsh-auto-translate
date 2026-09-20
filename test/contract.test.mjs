@@ -368,7 +368,20 @@ test('0.4.0：面板分组折叠 + 状态行分段（解决「太长/难读」�
   const src = read('client.js')
   // 四个分组，且默认只展开「常用」
   assert.match(src, /data-grp="common" open/, '「常用」分组应默认展开')
-  for (const g of ['engine', 'advanced', 'diag']) assert.match(src, new RegExp('data-grp="' + g + '"'), '缺少分组 ' + g)
+  for (const g of ['trigger', 'engine', 'advanced', 'diag']) assert.match(src, new RegExp('data-grp="' + g + '"'), '缺少分组 ' + g)
+  // 「常用」只放最常用的四项，其余挪到「触发与框选」/「高级」（真机实测：常用 8 行会让面板必须滚动）
+  const commonBlock = src.match(/data-grp="common" open>[\s\S]*?<\/details>/)
+  assert.ok(commonBlock, '应能找到常用分组')
+  assert.equal((commonBlock[0].match(/class="row"/g) || []).length, 4, '「常用」应只保留 4 行')
+  for (const k of ['data-set="enabled"', 'data-set="hoverEngine"', 'data-set="target"', 'data-set="selectionMode"']) {
+    assert.match(commonBlock[0], new RegExp(k), '「常用」里应有 ' + k)
+  }
+  const triggerBlock = src.match(/data-grp="trigger">[\s\S]*?<\/details>/)
+  assert.ok(triggerBlock, '应能找到触发与框选分组')
+  for (const k of ['data-set="hoverDelayMs"', 'data-set="selectionMinChars"', 'data-set="selMaxChars"']) {
+    assert.match(triggerBlock[0], new RegExp(k), '「触发与框选」里应有 ' + k)
+  }
+  assert.match(src, /data-grp="advanced">[\s\S]{0,400}?data-set="lang"/, '面板语言选择应挪到「高级」')
   assert.match(src, /data-act="expandAll"/, '应有「展开全部」')
   assert.match(src, /data-act="collapseAll"/, '应有「折叠全部」')
   assert.match(src, /data-act="slim"/, '应有「窄面板」开关（更不挡内容）')
@@ -406,6 +419,22 @@ test('0.4.1：大量框选必须分块翻译、有硬上限、且上限可在面
   // 4) 浮层要能装下大段译文
   assert.match(src, /\.selpop \.dst\{[^}]*max-height/, '浮层译文区必须可滚动')
   assert.match(src, /data-el="info"/, '浮层必须有进度/段数信息位')
+})
+
+test('0.4.2：真机验收脚本存在、是可选工具（不混进 npm test），且它自己会判定失败', () => {
+  const pkg = JSON.parse(read('package.json'))
+  assert.equal(pkg.scripts['verify:browser'], 'node scripts/verify-browser.mjs', '应有 verify:browser 脚本')
+  assert.doesNotMatch(pkg.scripts.test, /verify-browser/, '真机脚本不得塞进 npm test（无浏览器/无 puppeteer 时 npm test 必须仍绿）')
+  const src = read('scripts/verify-browser.mjs')
+  // 它必须能独立判定成败：非 0 退出码 + failures 列表
+  assert.match(src, /process\.exit\(failures\.length \? 1 : 0\)/, '必须按检查结果设置退出码')
+  assert.match(src, /needsScroll/, '必须检查面板是否需要滚动（jsdom 测不出的那类问题）')
+  assert.match(src, /clippedText/, '必须检查文字是否被裁')
+  assert.match(src, /horizontalOverflow/, '必须检查横向溢出')
+  assert.match(src, /mkdtempSync/, '必须用独立临时 profile，不能碰用户正在用的浏览器数据')
+  assert.match(src, /selfTranslationMarkers/, '必须检查插件有没有翻到自己')
+  assert.match(src, /page\.mouse\.move/, '悬停必须用真实鼠标事件')
+  assert.match(src, /new MouseEvent\('mouseup'/, '框选必须触发真实 mouseup 事件路径')
 })
 
 test('0.4.1：悬停必须穿透 shadow root（Web Component 内部文字），且复位时一并清理', () => {

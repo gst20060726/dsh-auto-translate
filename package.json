@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-translate",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Zero-token on-demand translation for the DeepSeek Harness web GUI: hover a block to translate it in place, drag-select text for a popup or in-place translation. Never auto-translates the page.",
   "type": "module",
   "main": "./index.js",
@@ -62,7 +62,8 @@
     "test": "node --test test/contract.test.mjs test/i18n.test.mjs test/e2e.dom.test.mjs",
     "fetch-vendor": "node scripts/fetch-vendor.mjs",
     "status": "powershell -ExecutionPolicy Bypass -File scripts/status.ps1",
-    "dashboard": "node scripts/dashboard.mjs"
+    "dashboard": "node scripts/dashboard.mjs",
+    "verify:browser": "node scripts/verify-browser.mjs"
   },
   "devDependencies": {
     "jsdom": "^30.0.1"

@@ -10,5 +10,7 @@ diagnose-*.json
 .DS_Store
 # generated status snapshot (run: node scripts/dashboard.mjs)
 dashboard.html
+# real-browser verification screenshots (run: npm run verify:browser)
+panel-preview*.png
 # ORT runtime is large: not committed, fetch it with npm run fetch-vendor or let the host fall back to the CDN
 vendor/ort/*.wasm

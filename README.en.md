@@ -40,7 +40,7 @@ The package ships **without** the 74MB ORT wasm (fetched from CDN on first use);
 | Action | Effect |
 | --- | --- |
 | hover ~0.6s | that block is swapped in place; move away and hover again to flip back to the original |
-| drag-select and release | translate the selection: floating panel by default (copy button), or switch the panel to **in-place** (click the page / press Esc to restore) |
+| drag-select and release | translate the selection: floating panel by default (copy button), or switch the panel to **in-place** (click the page / press Esc to restore). **Large selections are split into sentence chunks** and translated chunk by chunk with a `i/n chunks` progress line |
 | `Alt` + hover | translate/flip immediately |
 | `Ctrl+Alt+T` | open/close the panel (use this if you lost the chip) |
 | `Ctrl+Alt+H` | show/hide the chip |
@@ -52,6 +52,16 @@ The package ships **without** the 74MB ORT wasm (fetched from CDN on first use);
 > and has a narrow mode.
 
 All three hotkeys are rebindable inside the panel.
+
+### Coverage (what it can and cannot translate)
+
+| | Scope |
+| --- | --- |
+| **Can** | The DSH UI itself (shell, sidebar, buttons, dialogs, messages, tool output), anything other plugins render, and **text inside Web Components (shadow roots)** |
+| **Skips** | Inputs, `code`/`pre` (unless "also translate code" is on), `contenteditable`, CodeMirror/Monaco, and this plugin's own panel |
+| **Cannot** | Anything **outside the DSH page**: other browser tabs, other websites, native apps. The plugin is injected into the DSH web UI only — use a browser extension/userscript for those |
+
+A single selection translates up to **4000 characters** by default (configurable in the panel, `0` = no limit; a 60000-char hard cap remains). Beyond the cap you get an explicit "capped at the first N chars" note.
 
 ## Engines
 

@@ -37,8 +37,8 @@
 
 ## 当前版本
 
-- 版本 **0.4.0**（仓库 HEAD 见 `git log --oneline -1`）｜ 上一版代码是 0.3.0（指标入口 `metrics.mjs`）
-- npm 上的 latest 是 **0.2.2**（0.3.0 / 0.4.0 都**尚未发布**）
+- 版本 **0.4.1**（仓库 HEAD 见 `git log --oneline -1`）｜ 前两版 0.4.0（按需翻译）/ 0.3.0（指标入口 `metrics.mjs`）
+- npm 上的 latest 是 **0.2.2**（0.3.0 / 0.4.0 / 0.4.1 都**尚未发布**）
 - 已安装为 profile link：`dsh plugin --profile web add link:C:/Users/20549/.dsh/plugins/dsh-auto-translate`
 - 已上线镜像：**https://gitee.com/nysjn/dsh-auto-translate.git**（远端名 `gitee`，`main` 跟踪 `gitee/main`）
 - 已发布 npm：**dsh-auto-translate@0.2.2**（latest）｜ 0.2.0 / 0.2.1 也在线上
@@ -77,6 +77,31 @@
   `' · '` 拼接（只显示非零段），不再是一整行 ` | `。
 - 测试：`node --test "test/*.test.mjs"` → 38 项；旧 E2E（自动翻译/流式稳定期）已按新语义重写，
   新增框选/迁移/面板结构/文案契约测试。⚠️ **`node --test test/` 会报 MODULE_NOT_FOUND，必须用 glob**。
+
+## 0.4.1：大量框选 + shadow DOM 穿透（2026-09-20）
+
+用户问的两个能力，落地情况与结论：
+
+1. **框选大量翻译（已支持）**：`translateSelectionItem` 改为 `chunkText(text, selChunkChars=600)`
+   分块 → 逐块 `translateText` → `joinPieces()` 按目标语言拼接（zh/ja/ko 不加空格，拉丁加空格）→
+   浮层里边翻边更新 `[data-el="dst"]`，`[data-el="info"]` 显示「正在翻译 i/n 段…」/「共 n 段」。
+   - `selMaxChars` 默认 1200 → **4000**，面板「常用」组新增 `data-set="selMaxChars"`（0 = 不限），
+     另有 `HARD_CAP = 60000` 兜底；超限时 info 提示「已按上限只翻前 N 字符」且译文以 `…` 结尾。
+   - 浮层 CSS 放大：`min(620px,52vw)` × `62vh`，`.dst` 可滚动（原来 330px/250px 装不下长译文）。
+   - 每块完成后检查 `seq !== selSeq`（新的框选/mousedown 会 `hideSelPop()` → `selSeq++`）来中止，避免旧任务覆盖新结果。
+2. **DSH 外壳 / Web Component（已支持）**：实测 **DSH 全部 `dsh-client-ui-*` 客户端都不使用 shadow DOM**
+   （扫描了 dsh-app rc.2 下 46 个 client.js：attachShadow 计数全为 0）→ 外壳文字本来就在光 DOM，悬停/框选都能翻。
+   唯一用 shadow DOM 的是本插件自己的面板。但事件从 shadow root 冒出来时 `e.target` 会被重定向成宿主，
+   旧实现走到宿主时「自身无文本 → 一路向上 → 什么都不翻」→ 现在用 `composedTarget(e)`（`e.composedPath()`）
+   取最内层真实元素，Web Component 内部文字也能翻；路径里出现 `ROOT_ID` 或 `[data-dsh-at-skip]` 直接放弃。
+   同时 `resetTranslationState()` 的标记清理改为 `allMarkedHosts()`（递归收集 shadow root），
+   否则 shadow 内残留 `data-dsh-at` 会让那块「既翻不动也复原不了」。
+3. **翻不到的地方（架构限制，不要承诺）**：DSH 页面之外的界面 —— 别的标签页 / 其它网站 / 桌面原生 App。
+   客户端插件只注入 DSH 的 Web 界面，`dsh-browser` 那类扩展才是拿别的标签页的路子。
+
+- 测试：**45 项**（新增：大量框选两例、外壳覆盖一例、Web Component 一例、两条契约）。
+- ⚠️ 写 `package.json` 别用 `Set-Content -Encoding utf8`（PS 5.1 会写 **BOM + CRLF**，`JSON.parse` 直接报
+  `Unexpected token '﻿'`）→ 用 `node -e "...fs.writeFileSync(...,'utf8')"` 并核对首字节不是 239,187,191。
 
 ## 关键路径
 

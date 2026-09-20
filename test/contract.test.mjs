@@ -385,3 +385,45 @@ test('0.4.0：状态行不再残留自动翻译时代的措辞', () => {
   assert.doesNotMatch(src, /自动工作:页面上的外语文本就地替换/, '帮助文案不得再说「自动工作」')
   assert.match(src, /不会自动翻译整页/, '帮助文案必须明确「不会自动翻译整页」')
 })
+
+test('0.4.1：大量框选必须分块翻译、有硬上限、且上限可在面板里调', () => {
+  const src = read('client.js')
+  const fn = src.match(/async function translateSelectionItem\(item\) \{([\s\S]*?)\n\t\t\}/)
+  assert.ok(fn, '应能找到 translateSelectionItem')
+  // 1) 分块 + 逐块翻译（否则长选区只能翻一个 chunk 或整段超长送模型）
+  assert.match(fn[1], /chunkText\(text, chunkChars\)/, '长选区必须按 chunkText 分块')
+  assert.match(fn[1], /for \(var i = 0; i < parts\.length; i\+\+\)/, '必须逐块循环翻译')
+  assert.match(fn[1], /selProgress/, '逐块翻译必须给出进度')
+  assert.match(fn[1], /joinPieces\(outParts\)/, '分块译文必须按目标语言规则拼接')
+  // 2) 必须有硬兜底上限，且默认值不再是旧的 1200 硬编码
+  assert.match(fn[1], /HARD_CAP = \d+/, '必须有硬兜底上限，防止误选超大页面')
+  assert.doesNotMatch(fn[1], /\|\| 1200/, '不得再硬编码旧的 1200 上限')
+  assert.match(src, /selMaxChars: \d+/, 'DEFAULTS 必须有 selMaxChars')
+  // 3) 上限必须能在面板里调整（0 = 不限）
+  assert.match(src, /data-set="selMaxChars"/, '面板必须能调「框选上限」')
+  assert.match(src, /if \(key === 'selMaxChars'\) val = Math\.max\(0, Number\(val\) \|\| 0\)/, 'selMaxChars 必须按数字归一化（允许 0）')
+  assert.match(src, /selTruncated/, '超过上限必须有明确提示')
+  // 4) 浮层要能装下大段译文
+  assert.match(src, /\.selpop \.dst\{[^}]*max-height/, '浮层译文区必须可滚动')
+  assert.match(src, /data-el="info"/, '浮层必须有进度/段数信息位')
+})
+
+test('0.4.1：悬停必须穿透 shadow root（Web Component 内部文字），且复位时一并清理', () => {
+  const src = read('client.js')
+  // 事件从 shadow root 冒出来时 e.target 会被重定向成宿主 → 必须用 composedPath 取真实元素
+  assert.match(src, /function composedTarget\(e\)/, '必须有 composedTarget 解析 shadow 内的真实元素')
+  assert.match(src, /e\.composedPath \? e\.composedPath\(\)/, 'composedTarget 必须用 composedPath')
+  const over = src.match(/function onOverHoverMode\(e\) \{([\s\S]{0,300}?)\n\t\t\tvar hit/)
+  assert.ok(over, '应能找到 onOverHoverMode 开头')
+  assert.match(over[1], /composedTarget\(e\)/, '悬停必须走 composedTarget，不能直接用 e.target')
+  const ct = src.match(/function composedTarget\(e\) \{([\s\S]*?)\n\t\t\}/)
+  assert.ok(ct, '应能找到 composedTarget')
+  assert.match(ct[1], /n\.id === ROOT_ID\) return null/, '本插件面板内部必须仍然永不翻译')
+  // 复位时的标记清理必须覆盖 shadow root
+  assert.match(src, /function collectShadowRoots\(/, '必须有 shadow root 递归收集')
+  assert.match(src, /function allMarkedHosts\(/, '必须有跨 shadow 的标记收集')
+  const reset = src.match(/querySelectorAll\('\[data-dsh-at\]'\)/g) || []
+  assert.ok(reset.length >= 1, '仍需直接查标记（顶层）')
+  assert.match(src, /allMarkedHosts\(\)/, 'resetTranslationState 必须用 allMarkedHosts() 清理标记')
+  assert.doesNotMatch(src, /var marked = document\.querySelectorAll\('\[data-dsh-at\]'\)/, '不得只查顶层文档（会漏掉 shadow 内标记）')
+})

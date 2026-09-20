@@ -430,6 +430,155 @@ test('E2E 0.4.0 框选翻译: 在别处松手/点击不会翻出上一次遗留�
   }
 })
 
+test('E2E 0.4.1 大量框选: 长选区按块翻译，浮层列出全部译文并报告段数', { skip }, async () => {
+  const long = 'First sentence about the interface. Second sentence about the engines. '
+    + 'Third sentence about the models. Fourth sentence about the hotkeys.'
+  const dom = new JSDOM('<!doctype html><html><body><p id="p1">' + long + '</p></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true })
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, hoverSettings({ selChunkChars: 40, selMaxChars: 4000 }))
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const p1 = window.document.getElementById('p1')
+    const node = p1.firstChild
+    loadClientInto(window).apply({})
+
+    selectText(window, node, 0, node.nodeValue.length)
+    p1.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true }))
+
+    const root = window.document.getElementById('dsh-auto-translate-root')
+    let pop = null
+    assert.ok(await waitFor(() => { pop = root.shadowRoot.querySelector('.selpop'); return !!pop }, 3000), '浮层应出现')
+    assert.ok(await waitFor(() => /共 \d+ 段/.test(pop.querySelector('.info').textContent), 6000),
+      '浮层应报告分块数量，实际: ' + JSON.stringify(pop && pop.querySelector('.info').textContent))
+    const dst = pop.querySelector('.dst').textContent
+    const pieces = (dst.match(/ZH</g) || []).length
+    assert.ok(pieces >= 2, '长选区应被分成多块翻译，实际块数: ' + pieces + ' / ' + JSON.stringify(dst))
+    // 每一块都必须真的被翻到（不能只翻第一块就返回）
+    assert.match(dst, /First sentence/, '第一块译文应包含原文第一块')
+    assert.match(dst, /Fourth sentence/, '最后一块译文必须也在（不能只翻前一半）')
+    const expectChunks = Number((pop.querySelector('.info').textContent.match(/共 (\d+) 段/) || [])[1])
+    assert.equal(pieces, expectChunks, '译文块数应与报告的块数一致')
+    assert.doesNotMatch(pop.querySelector('.info').textContent, /已按上限/, '未超上限不应提示截断')
+  } finally {
+    window.close()
+  }
+})
+
+test('E2E 0.4.1 大量框选: 超过「框选上限」时按上限截断并明确提示', { skip }, async () => {
+  const long = 'First sentence about the interface. Second sentence about the engines. '
+    + 'Third sentence about the models. Fourth sentence about the hotkeys.'
+  const dom = new JSDOM('<!doctype html><html><body><p id="p1">' + long + '</p></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true })
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, hoverSettings({ selMaxChars: 45, selChunkChars: 40 }))
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const p1 = window.document.getElementById('p1')
+    const node = p1.firstChild
+    loadClientInto(window).apply({})
+
+    selectText(window, node, 0, node.nodeValue.length)
+    p1.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true }))
+
+    const root = window.document.getElementById('dsh-auto-translate-root')
+    let pop = null
+    assert.ok(await waitFor(() => { pop = root.shadowRoot.querySelector('.selpop'); return !!pop }, 3000), '浮层应出现')
+    assert.ok(await waitFor(() => /已按上限/.test(pop.querySelector('.info').textContent), 6000),
+      '超上限必须提示截断，实际: ' + JSON.stringify(pop && pop.querySelector('.info').textContent))
+    assert.match(pop.querySelector('.info').textContent, /前 45 字符/, '提示里应写明截断到的字符数')
+    assert.match(pop.querySelector('.dst').textContent, /…$/, '被截断的译文应以省略号结束')
+    assert.doesNotMatch(pop.querySelector('.dst').textContent, /hotkeys/, '上限之外的原文不应被翻译')
+  } finally {
+    window.close()
+  }
+})
+
+test('E2E 0.4.1 覆盖范围: 外壳文字（按钮/侧栏）可悬停翻译，输入框与代码块仍不被翻', { skip }, async () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><body>'
+    + '<button id="b"><span id="s">Settings</span></button>'
+    + '<input id="i" value="Settings">'
+    + '<code id="c">const settings = 1</code>'
+    + '<p id="p">Settings are stored here.</p>'
+    + '</body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true },
+  )
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, hoverSettings({ hoverDelayMs: 0 }))
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    loadClientInto(window).apply({})
+    const s = window.document.getElementById('s')
+    const codeNode = window.document.getElementById('c').firstChild
+    const pNode = window.document.getElementById('p').firstChild
+    const codeBefore = codeNode.nodeValue
+    const pBefore = pNode.nodeValue
+
+    // 外壳按钮里的文字（光 DOM）→ 悬停即翻
+    s.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+    assert.ok(await waitFor(() => /ZH</.test(s.firstChild.nodeValue), 3000),
+      '外壳按钮文字应可悬停翻译，实际: ' + JSON.stringify(s.firstChild.nodeValue))
+
+    // 代码块与其它块在同一段时间里不得被顺带翻译（覆盖率只补外壳，不越界）
+    await sleep(400)
+    assert.equal(codeNode.nodeValue, codeBefore, '代码块不得被翻译')
+    assert.equal(pNode.nodeValue, pBefore, '没被悬停的段落不得被翻译')
+  } finally {
+    window.close()
+  }
+})
+
+test('E2E 0.4.1 Web Component: shadow root 内部的文字也能悬停翻译，复位时标记一并清掉', { skip }, async () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><body><div id="host"></div></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true },
+  )
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, hoverSettings({ hoverDelayMs: 0 }))
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const host = window.document.getElementById('host')
+    const sr = host.attachShadow({ mode: 'open' })
+    const inner = window.document.createElement('div')
+    const span = window.document.createElement('span')
+    span.textContent = 'Settings panel inside a web component.'
+    inner.appendChild(span)
+    sr.appendChild(inner)
+
+    const mod = loadClientInto(window)
+    mod.apply({})
+
+    span.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true, composed: true }))
+    assert.ok(await waitFor(() => /ZH</.test(span.firstChild.nodeValue), 3000),
+      'shadow root 内的文字应可悬停翻译，实际: ' + JSON.stringify(span.firstChild.nodeValue))
+    assert.equal(span.getAttribute('data-dsh-at'), 'translated', 'shadow 内被翻的那一块应被标记')
+
+    // 还原 + 复位：两者都必须能穿透 shadow root（否则残留标记会让悬停静默失效）
+    mod.__test.revertTranslatedNodes()
+    assert.equal(span.firstChild.nodeValue, 'Settings panel inside a web component.', '应还原成原文')
+    mod.__test.resetTranslationState()
+    assert.equal(span.getAttribute('data-dsh-at'), null, 'shadow 内的标记必须被清掉')
+
+    // 复位后再次悬停必须仍能翻译（旧 bug：records 空 + 残留标记 → 完全无反应）
+    span.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true, composed: true, relatedTarget: window.document.body }))
+    await sleep(120)
+    span.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true, composed: true }))
+    assert.ok(await waitFor(() => /ZH</.test(span.firstChild.nodeValue), 3000),
+      '复位后再次悬停必须能翻译，实际: ' + JSON.stringify(span.firstChild.nodeValue))
+  } finally {
+    window.close()
+  }
+})
+
 test('E2E 0.4.0 框选翻译: 「就地替换」后点击页面即还原原文', { skip }, async () => {
   const dom = new JSDOM(
     '<!doctype html><html><body><p id="p1">Hello world, this needs translation.</p></body></html>',

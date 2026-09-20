@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-translate",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Zero-token on-demand translation for the DeepSeek Harness web GUI: hover a block to translate it in place, drag-select text for a popup or in-place translation. Never auto-translates the page.",
   "type": "module",
   "main": "./index.js",

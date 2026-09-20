@@ -28,7 +28,8 @@ window.__ModuleLoader__.load({
 			hoverEngine: 'local',    // 按需翻译用哪个引擎：local | online | custom
 			selectionMode: 'popup',  // 框选翻译呈现：popup(浮层) | inline(就地替换) | off
 			selectionMinChars: 8,    // 框选至少这么多字符才触发
-			selMaxChars: 1200,       // 单次框选翻译的字符上限（超出的部分不翻，避免拖垮引擎）
+			selMaxChars: 4000,       // 单次框选翻译的字符上限（0 = 不限；超出按上限截断并提示）
+			selChunkChars: 600,      // 大段框选按这个粒度分块翻译，边翻边显示进度
 			slimPanel: false,        // 面板「窄」模式：更小、更不挡内容
 			onlineOrder: 'mymemory', // mymemory(此网络可达) | google(部分网络不可达)
 			endpoint: '',            // 自定义端点模板：https://host/translate?q={text}&target={target}&source={source}
@@ -1102,6 +1103,22 @@ window.__ModuleLoader__.load({
 		}
 		// 找鼠标下面真正该翻译的那一块（向上找到最小且自身直接含文本的祖先）
 		// 返回该块当前的悬停态：'none' 未翻 / 'translated' 已是译文 / 'original' 已被切回原文
+		// 用 composedPath 取「最内层的真实元素」：事件从 shadow root 冒出来时 e.target 会被
+		// 重定向成宿主元素，用 e.target 会导致「宿主自身没有文本 → 一路向上 → 什么都不翻」。
+		// 这样 Web Component 内部的文字（含其它插件自绘的面板）也能悬停翻译。
+		function composedTarget(e) {
+			var path = e.composedPath ? e.composedPath() : null;
+			if (path && path.length) {
+				for (var i = 0; i < path.length; i++) {
+					var n = path[i];
+					if (!n || n.nodeType !== 1) continue;
+					if (n.id === ROOT_ID) return null;      // 本插件面板内部：永不翻译自己
+					if (n.hasAttribute && n.hasAttribute('data-dsh-at-skip')) return null;
+					return n;
+				}
+			}
+			return e.target && e.target.nodeType === 1 ? e.target : null;
+		}
 		function hoverHostState(el) {
 			var cur = el;
 			while (cur && cur !== document.body && cur.nodeType === 1) {
@@ -1137,7 +1154,7 @@ window.__ModuleLoader__.load({
 		}
 		function onOverHoverMode(e) {
 			if (!settings.enabled || hoverBusy) return;
-			var el = e.target && e.target.nodeType === 1 ? e.target : null;
+			var el = composedTarget(e);
 			if (!el || !el.closest) return;
 			var hit = hoverHostState(el);
 			if (!hit) return;
@@ -1246,6 +1263,34 @@ window.__ModuleLoader__.load({
 			}
 			return n;
 		}
+		// document.querySelectorAll **不会**进 shadow root：Web Component 内部的标记必须单独收集，
+		// 否则复位后残留的 data-dsh-at 会让悬停逻辑以为「这块已翻译」，而这批 records 已被清空
+		// → 既翻不动也复原不了（静默失效）。
+		function collectShadowRoots(root, out) {
+			out = out || [];
+			var all;
+			try { all = root.querySelectorAll('*'); } catch (e) { return out; }
+			for (var i = 0; i < all.length; i++) {
+				var sr = all[i].shadowRoot;
+				if (sr) { out.push(sr); collectShadowRoots(sr, out); }
+			}
+			return out;
+		}
+		function allMarkedHosts() {
+			var res = [];
+			try {
+				var top = document.querySelectorAll('[data-dsh-at]');
+				for (var i = 0; i < top.length; i++) res.push(top[i]);
+			} catch (e) { }
+			var roots = collectShadowRoots(document);
+			for (var r = 0; r < roots.length; r++) {
+				try {
+					var m = roots[r].querySelectorAll('[data-dsh-at]');
+					for (var k = 0; k < m.length; k++) res.push(m[k]);
+				} catch (e) { }
+			}
+			return res;
+		}
 		// 丢弃所有译文记录：必须**同时**清掉页面上的 data-dsh-at 标记。
 		// 否则宿主上残留的标记会让悬停逻辑以为"这块已翻译"，而 records 已空 → 既翻不动也复原不了（静默失效）。
 		function resetTranslationState(revertFirst) {
@@ -1265,24 +1310,29 @@ window.__ModuleLoader__.load({
 			onlineRetryAt = 0;
 			if (onlineRetryTimer) { clearTimeout(onlineRetryTimer); onlineRetryTimer = null; }
 			try {
-				var marked = document.querySelectorAll('[data-dsh-at]');
+				var marked = allMarkedHosts();
 				for (var k = 0; k < marked.length; k++) marked[k].removeAttribute('data-dsh-at');
 			} catch (e) { }
 		}
 
 		// ===================== 框选翻译（主动触发；从不自动翻页） =====================
-		var hostSr = null, selPopEl = null, selSrcEl = null, selDstEl = null;
+		var hostSr = null, selPopEl = null, selSrcEl = null, selDstEl = null, selInfoEl = null;
 		var selBusy = false, selSeq = 0, inlineSpans = [];
+		// 中文/日文/韩文之间不需要空格，拉丁语系之间需要
+		function isCjkTarget() { return /^(zh|ja|ko)/.test(String(settings.target)); }
+		function joinPieces(arr) { return arr.join(isCjkTarget() ? '' : ' '); }
 		function buildSelPop() {
 			if (selPopEl || !hostSr) return;
 			var box = document.createElement('div');
 			box.className = 'selpop';
 			box.innerHTML = '<div class="src" data-el="src"></div>'
 				+ '<div class="dst" data-el="dst"></div>'
+				+ '<div class="info" data-el="info"></div>'
 				+ '<div class="bar"><button data-act="selCopy" data-i18n="copyDiag"></button><button data-act="selClose" data-i18n="selClose"></button></div>';
 			selPopEl = box;
 			selSrcEl = box.querySelector('[data-el="src"]');
 			selDstEl = box.querySelector('[data-el="dst"]');
+			selInfoEl = box.querySelector('[data-el="info"]');
 			box.addEventListener('click', function (e) {
 				var b = e.target && e.target.closest ? e.target.closest('[data-act]') : null;
 				if (!b) return;
@@ -1317,8 +1367,10 @@ window.__ModuleLoader__.load({
 			positionSelPop(rect);
 			selSrcEl.textContent = srcText.length > 600 ? srcText.slice(0, 600) + ' …' : srcText;
 			selDstEl.textContent = dstText;
+			if (selInfoEl) selInfoEl.textContent = '';
 			selPopEl.classList.add('on');
 		}
+		function setSelInfo(text) { if (selInfoEl) selInfoEl.textContent = text || ''; }
 		// 输入框 / 代码块 / 面板自身 / contenteditable 一律不翻（与悬停的跳过规则保持一致）
 		function selectionBlocked(el) {
 			if (!el || el.nodeType !== 1) return true;
@@ -1397,10 +1449,13 @@ window.__ModuleLoader__.load({
 		async function translateSelectionItem(item) {
 			selBusy = true;
 			var seq = ++selSeq;
-			var text = item.text, clipped = false;
-			var maxChars = Math.max(40, Number(settings.selMaxChars) || 1200);
-			if (text.length > maxChars) { text = text.slice(0, maxChars); clipped = true; }
 			var popup = settings.selectionMode === 'popup';
+			// 上限：面板可调、0 = 不限；再给一个硬兜底，防止误把整个超大页面全选进来
+			var HARD_CAP = 60000;
+			var want = Number(settings.selMaxChars) || 0;
+			var limit = want > 0 ? Math.min(want, HARD_CAP) : HARD_CAP;
+			var text = item.text, clipped = false;
+			if (text.length > limit) { text = text.slice(0, limit); clipped = true; }
 			if (popup) showSelPop(item.rect, item.text, t('selWorking'));
 			try {
 				var src = await planSource(text);
@@ -1409,17 +1464,39 @@ window.__ModuleLoader__.load({
 					else if (statusEl) statusEl.textContent = t('selSameLang');
 					return;
 				}
-				var out = await translateText(text, src, String(settings.target).split('-')[0]);
-				if (seq !== selSeq && popup) return;                 // 已被新的框选/关闭取代
-				out = String(out || '').trim();
+				var tgt = String(settings.target).split('-')[0];
+				var chunkChars = Math.max(120, Number(settings.selChunkChars) || 600);
+				var parts = chunkText(text, chunkChars);
+				if (!parts.length) parts = [text];
+				// 大段框选：逐块翻译 + 边翻边显示，避免「点了没反应」
+				var outParts = [];
+				for (var i = 0; i < parts.length; i++) {
+					if (seq !== selSeq) return;                       // 已被新的框选/关闭取代
+					var piece = String(await translateText(parts[i], src, tgt) || '').trim();
+					outParts.push(piece);
+					if (popup) {
+						selDstEl.textContent = joinPieces(outParts) + (i + 1 < parts.length ? ' …' : '');
+						setSelInfo(parts.length > 1 ? t('selProgress').replace('{i}', i + 1).replace('{n}', parts.length) : '');
+						positionSelPop(item.rect);
+					} else if (statusEl && parts.length > 1) {
+						statusEl.textContent = t('selProgress').replace('{i}', i + 1).replace('{n}', parts.length);
+					}
+				}
+				if (seq !== selSeq) return;
+				var out = joinPieces(outParts);
+				var note = '';
+				if (clipped) note = t('selTruncated').replace('{n}', limit);
 				if (!out) throw new Error(t('selEmpty'));
 				if (clipped) out += ' …';
 				var inlineOk = false;
 				if (settings.selectionMode === 'inline') {
 					inlineOk = inlineReplaceSelection(item, out);
-					if (!inlineOk) showSelPop(item.rect, item.text, out);   // 跨段落的选区退回浮层
+					if (!inlineOk) { showSelPop(item.rect, item.text, out); setSelInfo(note); }   // 跨段落的选区退回浮层
 				} else {
-					showSelPop(item.rect, item.text, out);
+					selDstEl.textContent = out;
+					setSelInfo(parts.length > 1
+						? t('selChunks').replace('{n}', parts.length) + (note ? ' · ' + note : '')
+						: note);
 				}
 				stats.chars += text.length;
 				updateStatus();
@@ -1430,7 +1507,7 @@ window.__ModuleLoader__.load({
 			} catch (e) {
 				var msg = (e && e.message) || String(e);
 				lastError = msg;
-				if (popup) showSelPop(item.rect, item.text, t('selFailed') + msg);
+				if (popup) { selDstEl.textContent = t('selFailed') + msg; setSelInfo(''); }
 				else if (statusEl) statusEl.textContent = t('selFailed') + msg;
 				updateStatus();
 			} finally {
@@ -1465,6 +1542,8 @@ window.__ModuleLoader__.load({
 				modeLabel: '当前模式', onDemandNote: '按需触发，永不自动翻译整页',
 				selectionMode: '框选翻译', selPopup: '浮层显示译文', selInline: '就地替换(点击还原)', selOff: '关闭',
 				selectionMinChars: '最少选取字数', selTranslate: '译这段', selClose: '关闭',
+				selMaxChars: '框选上限(0=不限)', selProgress: '正在翻译 {i}/{n} 段…', selChunks: '共 {n} 段',
+				selTruncated: '已按上限只翻前 {n} 字符',
 				selWorking: '翻译中…', selSameLang: '这段已经是目标语言了', selEmpty: '引擎没有返回内容',
 				selFailed: '翻译失败：', selDone: '已就地替换：',
 				selInlineFallback: '选区跨了多段，已改用浮层显示',
@@ -1517,6 +1596,8 @@ window.__ModuleLoader__.load({
 				modeLabel: 'Mode', onDemandNote: 'on-demand only, never auto-translates the page',
 				selectionMode: 'Selection', selPopup: 'Floating panel', selInline: 'Replace in place (click to restore)', selOff: 'Off',
 				selectionMinChars: 'Min selected chars', selTranslate: 'Translate', selClose: 'Close',
+				selMaxChars: 'Selection cap (0 = none)', selProgress: 'Translating {i}/{n} chunks…', selChunks: '{n} chunks',
+				selTruncated: 'capped at the first {n} chars',
 				selWorking: 'Translating…', selSameLang: 'Already in the target language', selEmpty: 'The engine returned nothing',
 				selFailed: 'Translation failed: ', selDone: 'Replaced in place: ',
 				selInlineFallback: 'Selection spans several blocks — shown in the floating panel instead',
@@ -1742,10 +1823,11 @@ window.__ModuleLoader__.load({
 				+ '.card.slim{width:238px;padding:10px}'
 				+ '.card.slim .row{margin:4px 0}'
 				+ '.card.slim details.grp{padding:0 6px}'
-				+ '.selpop{position:fixed;z-index:2147483100;max-width:330px;max-height:250px;overflow:auto;pointer-events:auto;display:none;background:rgba(20,22,28,.97);color:#e8eaf0;border:1px solid rgba(255,255,255,.2);border-radius:10px;padding:8px 10px;box-shadow:0 8px 24px rgba(0,0,0,.42);font-size:12px;line-height:1.55}'
+				+ '.selpop{position:fixed;z-index:2147483100;max-width:min(620px,52vw);max-height:62vh;overflow:auto;pointer-events:auto;display:none;background:rgba(20,22,28,.97);color:#e8eaf0;border:1px solid rgba(255,255,255,.2);border-radius:10px;padding:8px 10px;box-shadow:0 8px 24px rgba(0,0,0,.42);font-size:12px;line-height:1.55}'
 				+ '.selpop.on{display:block}'
 				+ '.selpop .src{opacity:.55;font-size:11px;max-height:64px;overflow:auto;margin:0 0 5px;white-space:pre-wrap}'
-				+ '.selpop .dst{white-space:pre-wrap;user-select:text}'
+				+ '.selpop .dst{white-space:pre-wrap;user-select:text;max-height:46vh;overflow:auto}'
+				+ '.selpop .info{opacity:.5;font-size:10.5px;margin-top:5px}'
 				+ '.selpop .bar{display:flex;gap:6px;justify-content:flex-end;margin-top:7px}';
 			sr.appendChild(style);
 			hostSr = sr;
@@ -1761,6 +1843,7 @@ window.__ModuleLoader__.load({
 				+ '<div class="row"><label data-i18n="hoverDelay"></label><input type="number" min="0" max="5000" step="100" data-set="hoverDelayMs" style="width:80px"></div>'
 				+ '<div class="row"><label data-i18n="selectionMode"></label><select data-set="selectionMode"><option value="popup" data-i18n="selPopup"></option><option value="inline" data-i18n="selInline"></option><option value="off" data-i18n="selOff"></option></select></div>'
 				+ '<div class="row"><label data-i18n="selectionMinChars"></label><input type="number" min="1" max="500" step="1" data-set="selectionMinChars" style="width:70px"></div>'
+				+ '<div class="row"><label data-i18n="selMaxChars"></label><input type="number" min="0" step="500" data-set="selMaxChars" style="width:80px"></div>'
 				+ '<div class="row"><label data-i18n="lang"></label><select data-set="lang"><option value="auto" data-i18n="langAuto"></option><option value="zh">中文</option><option value="en">English</option></select></div>'
 				+ '<div class="hint" data-i18n="triggerHint"></div>'
 				+ '</details>'
@@ -1955,7 +2038,8 @@ window.__ModuleLoader__.load({
 				var key = e.target && e.target.getAttribute && e.target.getAttribute('data-set');
 				if (!key) return;
 				var val = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
-				if (key === 'hoverDelayMs' || key === 'cacheLimit') val = Number(val) || 0;
+				if (key === 'hoverDelayMs' || key === 'cacheLimit' || key === 'selChunkChars') val = Number(val) || 0;
+				if (key === 'selMaxChars') val = Math.max(0, Number(val) || 0);
 				if (key === 'selectionMinChars') val = Math.max(1, Number(val) || 8);
 				settings[key] = val;
 				saveSettings();

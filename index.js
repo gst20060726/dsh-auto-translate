@@ -14,6 +14,7 @@ import { once } from 'node:events'
 import { homedir } from 'node:os'
 import { dirname, extname, join, normalize, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { collectMetrics } from './metrics.mjs'
 
 export const name = 'dsh-auto-translate'
 // 必须显式注入 webServer：否则本插件的 apply 先于 web 服务器提供该服务，
@@ -26,6 +27,12 @@ const ROUTE_PREFIX = '/dsh-auto-translate/vendor'
 // 跨域重定向后 CORS 头不可靠（浏览器报 Failed to fetch），故由宿主半转发。
 const MODEL_PREFIX = '/dsh-auto-translate/model-v2'
 const DIAG_PATH = '/dsh-auto-translate/diag'
+// 公开指标（npm 下载量 / 逐版本 / Gitee）统一由宿主半查一次并缓存给浏览器半，
+// 避免浏览器直接跨域，也避免各处重复实现（数据源见 metrics.mjs）。
+const METRICS_PATH = '/dsh-auto-translate/metrics'
+const METRICS_TTL_MS = 60 * 1000
+/** @type {{at: number, data: unknown}|null} 指标内存缓存（避免浏览器每次刷新都打外部 API） */
+let metricsCache = null
 const CACHE_INFO_PATH = '/dsh-auto-translate/cache-info'
 const CACHE_CLEAR_PATH = '/dsh-auto-translate/cache-clear'
 const DIAG_DIR = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'dsh-auto-translate')
@@ -391,6 +398,30 @@ export function apply(ctx) {
 				serveCacheInfo(req, res)
 			},
 		})
+		// 公开指标：宿主半查一次并做 60 秒内存缓存，浏览器半同源读取（无跨域问题）。
+		safeRegister({
+			kind: 'exact',
+			path: METRICS_PATH,
+			handler: async (req, res) => {
+				const hostName = String(req.headers.host || '').split(':')[0]
+				if (!/^(127\.0\.0\.1|localhost|\[::1\]|::1)$/.test(hostName)) {
+					res.writeHead(403, { 'Content-Type': 'text/plain' })
+					res.end('loopback only')
+					return
+				}
+				try {
+					const now = Date.now()
+					if (!metricsCache || now - metricsCache.at > METRICS_TTL_MS) {
+						metricsCache = { at: now, data: await collectMetrics() }
+					}
+					res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
+					res.end(JSON.stringify(metricsCache.data))
+				} catch (err) {
+					res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
+					res.end(JSON.stringify({ error: String((err && err.message) || err) }))
+				}
+			},
+		})
 		safeRegister({
 			kind: 'exact',
 			path: DIAG_PATH,
@@ -409,7 +440,7 @@ export function apply(ctx) {
 				saveDiag(req, res)
 			},
 		})
-		console.log('[dsh-auto-translate] routes registered: ' + ROUTE_PREFIX + ' , ' + MODEL_PREFIX + ' , ' + DIAG_PATH + ' -> ' + DIAG_DIR)
+		console.log('[dsh-auto-translate] routes registered: ' + ROUTE_PREFIX + ' , ' + MODEL_PREFIX + ' , ' + METRICS_PATH + ' , ' + DIAG_PATH + ' -> ' + DIAG_DIR)
 		return true
 	}
 

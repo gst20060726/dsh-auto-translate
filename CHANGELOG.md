@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0 — 2026-09-20
+
+### 新增
+- **公开指标统一入口 `metrics.mjs`**（根目录，随包发布）：一处采集 npm 包元数据、下载量
+  （日/周/月 + 逐日 + **逐版本**）、Gitee star/fork/watch/issue；**纯 HTTP，不 spawn 任何子进程**
+  （因此不再依赖 `npm` / `dsh` 是否在 PATH 上）。对失败的来源只置该字段为 null 并附错误串，绝不整体抛错。
+  - CLI：`node metrics.mjs`（可读表格）/ `node metrics.mjs --json`（机器可读）。
+- **宿主半新增路由 `/dsh-auto-translate/metrics`**：宿主查一次并做 60 秒内存缓存，浏览器半同源读取
+  （避免跨域，也避免各处重复实现）。
+- **插件面板新增「下载量」行**：状态行显示 `下载量 <n>/wk <n>/day`，面板内显示逐版本明细；
+  打开面板时自动刷新。
+
+### 变更
+- `scripts/status.ps1` 与 `scripts/dashboard.mjs` **改为复用 `metrics.mjs`**，删掉各自的 `npm view` /
+  外部 API 调用；`status.ps1` 不再依赖 `npm` CLI，新增 `dl / day` 与 `per-version` 行。
+- `dashboard.mjs` 新增「逐版本下载（近一周 · 各版本占比）」区块与「近一天下载」指标块。
+
 ## 0.2.2 — 2026-09-17 ｜ 首次对外发布完整修复版
 
 > **版本号说明**：对外（npm）此前只发过 `0.2.0` 与 `0.2.1`，之后的修复全部只存在于仓库中。

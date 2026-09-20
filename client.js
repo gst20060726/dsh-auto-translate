@@ -520,6 +520,30 @@ window.__ModuleLoader__.load({
 				}).catch(function () { });
 			} catch (e) { }
 		}
+		// 公开指标（下载量等）由宿主半查好并缓存，这里同源读取；数据源统一在 metrics.mjs。
+		var metricsInfo = '';
+		function refreshMetricsInfo() {
+			try {
+				fetch('/dsh-auto-translate/metrics').then(function (r) { return r.json(); }).then(function (j) {
+					if (!j || j.error) return;
+					var dl = j.downloads || {};
+					var parts = [];
+					if (dl.week != null) parts.push(dl.week + '/wk');
+					if (dl.day != null) parts.push(dl.day + '/day');
+					var per = [];
+					if (dl.perVersion) {
+						var keys = Object.keys(dl.perVersion).sort(function (a, b) { return dl.perVersion[b] - dl.perVersion[a]; });
+						for (var i = 0; i < keys.length && i < 4; i++) per.push(keys[i] + '=' + dl.perVersion[keys[i]]);
+					}
+					metricsInfo = t('metricsLabel') + ' ' + parts.join(' ');
+					metricsDetail = per.join('  ');
+					var box = cardEl && cardEl.querySelector('[data-el="metricsBox"]');
+					if (box) box.textContent = per.length ? (parts.join(' ') + '  |  ' + per.join('  ')) : parts.join(' ');
+					updateStatus();
+				}).catch(function () { });
+			} catch (e) { }
+		}
+		var metricsDetail = '';
 		function requestPersist() {
 			try {
 				if (navigator.storage && navigator.storage.persist) {
@@ -682,6 +706,7 @@ window.__ModuleLoader__.load({
 			applySettingsToUI();
 			if (cardEl) cardEl.classList.add('open');
 			placeChip();
+			refreshMetricsInfo();
 			updateStatus();
 		}
 		function failAllPending(msg) {
@@ -1225,6 +1250,7 @@ window.__ModuleLoader__.load({
 		var I18N = {
 			zh: {
 				chipLabel: '译', cacheLabel: '宿主缓存', clearHostCache: '清空宿主缓存', cacheCleared: '宿主缓存已清空',
+				metricsLabel: '下载量',
 				translateCode: '也翻译代码/思考块(实验)', avgLatency: '平均 {ms}ms/句',
 				multiTab: '检测到 {n} 个其他标签页(译文缓存共享,内存会翻倍)',
 				workerMode: '推理实例', wmAuto: '自动(共享优先)', multiMode: '多语种策略', mmTwoHop: '两跳(省内存/快)',
@@ -1261,6 +1287,7 @@ window.__ModuleLoader__.load({
 			},
 			en: {
 				chipLabel: 'Tr', cacheLabel: 'host cache', clearHostCache: 'Clear host cache', cacheCleared: 'Host cache cleared',
+				metricsLabel: 'downloads',
 				translateCode: 'Also translate code/thinking blocks (experimental)', avgLatency: 'avg {ms}ms/sentence',
 				multiTab: '{n} other tab(s) detected (translation cache shared, memory doubles)',
 				workerMode: 'Inference instance', wmAuto: 'Auto (prefer shared)', multiMode: 'Multilingual strategy', mmTwoHop: 'Two-hop (light/fast)',
@@ -1359,6 +1386,7 @@ window.__ModuleLoader__.load({
 			if (paired.length && statusEl) statusEl.textContent += t('stLoaded') + paired.join(',');
 			if (warmingPair && statusEl) statusEl.textContent += t('stWarming') + warmingPair;
 			if (hostCacheInfo && statusEl) statusEl.textContent += ' | ' + hostCacheInfo;
+			if (metricsInfo && statusEl) statusEl.textContent += ' | ' + metricsInfo;
 			if (bcPeers > 0 && statusEl) statusEl.textContent += ' | ' + t('multiTab').replace('{n}', bcPeers);
 			var errBoxEl = cardEl && cardEl.querySelector('[data-el="errbox"]');
 			if (errBoxEl) {
@@ -1465,6 +1493,7 @@ window.__ModuleLoader__.load({
 				+ '<div class="row"><label data-i18n="compactChip"></label><input type="checkbox" data-set="chipCompact"></div>'
 				+ '<div class="row"><label data-i18n="translateCode"></label><input type="checkbox" data-set="translateCode"></div>'
 				+ '<div class="row"><button data-act="clearHostCache" data-i18n="clearHostCache"></button></div>'
+				+ '<div class="row"><label data-i18n="metricsLabel"></label><span data-el="metricsBox" style="color:#9aa4b2;font-size:11px"></span></div>'
 				+ '<div class="row"><button data-act="resetpos" data-i18n="resetPos"></button><button data-act="hide" data-i18n="hideChip"></button><button data-act="clearcache" data-i18n="clearCache"></button></div>'
 				+ '<div class="row"><button data-act="rescan" data-i18n="rescan"></button><button data-act="restore" data-i18n="restore"></button></div>'
 				+ '<div class="hint" data-el="status"></div>'
@@ -1801,6 +1830,7 @@ window.__ModuleLoader__.load({
 			} catch (e) { }
 			setTimeout(function () { scanRoot(document.body, 0); }, 900);
 			refreshHostCacheInfo();
+			refreshMetricsInfo();
 			// 启动自动预热：模型已在浏览器缓存里，只需重建会话（几百毫秒~数秒）
 			if (settings.enabled && settings.engine !== 'off' && (settings.localWarmOnce || settings.engine === 'local')) {
 				setTimeout(function () { try { warmLocal(); } catch (e) { } }, 1500);

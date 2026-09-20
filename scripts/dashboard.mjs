@@ -11,10 +11,11 @@
  *   node scripts/dashboard.mjs --open     # 生成并打开
  *   node scripts/dashboard.mjs --out x.html
  */
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { collectMetrics, sortedVersions } from '../metrics.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
@@ -45,52 +46,27 @@ const lastMsg = tryRun('git', ['log', '-1', '--format=%s']);
 const lastTime = tryRun('git', ['log', '-1', '--format=%ad', '--date=format:%Y-%m-%d %H:%M']);
 const dirtyFiles = tryRun('git', ['status', '--porcelain']).split('\n').filter(Boolean);
 
-// ---------- npm registry ----------
-// 用 execSync(单命令字符串)：Windows 上 .cmd 批处理必须经 shell 才能执行，而
-// shell + args 组合在 Node 22+ 会触发 DEP0190，所以走字符串形式。
-let npm = null;
-let npmSkip = '';
-try {
-  const raw = execSync(`npm view ${NAME} --json`, {
-    cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
-  });
-  if (raw.trim().startsWith('{')) npm = JSON.parse(raw);
-  else npmSkip = 'npm view 返回了非 JSON 内容';
-} catch (e) {
-  npmSkip = e.status ? `npm view 退出码 ${e.status}` : e.message;
-}
+// ---------- 公开指标：单一数据源 ----------
+// 采集逻辑统一在根目录 metrics.mjs（纯 HTTP，不需要 npm/dsh 子进程），
+// 与 scripts/status.ps1、宿主半 /dsh-auto-translate/metrics 路由共用同一份实现。
+const collected = await collectMetrics({ name: NAME });
+const npm = collected.pkg
+  ? { version: collected.pkg.latest, dist: { shasum: collected.pkg.shasum, fileCount: collected.pkg.fileCount, unpackedSize: collected.pkg.unpackedSize }, time: { modified: collected.pkg.modified } }
+  : null;
+const npmSkip = npm ? '' : (collected.pkgError || 'metrics unavailable');
 
-// ---------- 指标：npm 下载量 + Gitee 收藏 ----------
-// 说明：npm / Gitee 都不提供「包页浏览量」；能反映使用量的是 npm 下载量（新包当天无数据，
-// 官方 downloads API 会 404）与 Gitee 的 star/fork/watch。全部走公开接口，无凭据。
-async function getJson(url, timeoutMs = 15000) {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), timeoutMs);
-  try {
-    const r = await fetch(url, { signal: ac.signal, headers: { 'user-agent': 'dsh-auto-translate-dashboard' } });
-    if (!r.ok) return { error: `HTTP ${r.status}` };
-    return { json: await r.json() };
-  } catch (e) {
-    return { error: e.name === 'AbortError' ? '超时' : e.message };
-  } finally { clearTimeout(timer); }
-}
-
-const dlWeek = await getJson(`https://api.npmjs.org/downloads/point/last-week/${NAME}`);
-const dlMonth = await getJson(`https://api.npmjs.org/downloads/point/last-month/${NAME}`);
-const dlRange = await getJson(`https://api.npmjs.org/downloads/range/last-month/${NAME}`);
-const gitee = await getJson('https://gitee.com/api/v5/repos/nysjn/dsh-auto-translate');
-
-const dlHasData = Boolean(dlWeek.json || dlMonth.json);
 const metrics = {
-  week: dlWeek.json?.downloads ?? null,
-  month: dlMonth.json?.downloads ?? null,
-  days: Array.isArray(dlRange.json?.downloads) ? dlRange.json.downloads : [],
-  dlNote: dlHasData ? '' : `下载统计尚无数据（${dlWeek.error ?? '未返回'}）—— npm 对新发布的包延迟约一天开始计数`,
-  star: gitee.json?.stargazers_count ?? null,
-  fork: gitee.json?.forks_count ?? null,
-  watch: gitee.json?.watchers_count ?? null,
-  issue: gitee.json?.open_issues_count ?? null,
-  giteeNote: gitee.json ? '' : `Gitee 指标查询失败（${gitee.error}）`,
+  day: collected.downloads.day,
+  week: collected.downloads.week,
+  month: collected.downloads.month,
+  days: collected.downloads.daily || [],
+  perVersion: collected.downloads.perVersion || null,
+  dlNote: collected.downloadsError ? `下载统计不可用（${collected.downloadsError}）` : '',
+  star: collected.gitee?.star ?? null,
+  fork: collected.gitee?.fork ?? null,
+  watch: collected.gitee?.watch ?? null,
+  issue: collected.gitee?.issue ?? null,
+  giteeNote: collected.gitee ? '' : `Gitee 指标查询失败（${collected.giteeError}）`,
 };
 
 // ---------- 本地 tgz ----------
@@ -137,9 +113,25 @@ const sparkRows = metrics.days.slice(-14).map((d) => {
          `<span class="bar" style="width:${w}px"></span><span class="num">${fnum(d.downloads)}</span></div>`;
 }).join('');
 
+// 逐版本下载（npm /versions API，周维度）
+const perVer = sortedVersions(metrics.perVersion);
+const perVerRows = perVer.map(([v, n]) => {
+  const share = metrics.week ? Math.round((n / metrics.week) * 100) : 0;
+  const w = perVer[0] ? Math.round((n / perVer[0][1]) * 160) : 0;
+  return `<div class="spark"><span class="day">v${esc(v)}</span>` +
+         `<span class="bar" style="width:${w}px"></span>` +
+         `<span class="num">${fnum(n)}（${share}%）</span></div>`;
+}).join('');
+const perVerBox = perVerRows
+  ? `<div class="sparkbox"><div class="sparktitle">逐版本下载（近一周 · 合计 ${fnum(metrics.week)}）</div>${perVerRows}</div>`
+  : '';
+
 const metricsSection = `
   <h2>使用量指标</h2>
   <div class="grid">
+    <div class="tile"><div class="lbl">npm 近一天下载</div>
+      <div class="val">${fnum(metrics.day)}</div>
+      <div class="note">官方 downloads API</div></div>
     <div class="tile"><div class="lbl">npm 近一周下载</div>
       <div class="val">${fnum(metrics.week)}</div>
       <div class="note">官方 downloads API</div></div>
@@ -155,6 +147,7 @@ const metricsSection = `
   </div>
   ${metrics.dlNote ? `<div class="note-lg">⏳ ${esc(metrics.dlNote)}</div>` : ''}
   ${metrics.giteeNote ? `<div class="note-lg">⚠️ ${esc(metrics.giteeNote)}</div>` : ''}
+  ${perVerBox}
   ${sparkRows ? `<div class="sparkbox"><div class="sparktitle">npm 近 14 天每日下载</div>${sparkRows}</div>` : ''}
 `;
 

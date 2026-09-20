@@ -1,6 +1,6 @@
 {
   "name": "dsh-auto-translate",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Zero-token auto-translation for the DeepSeek Harness web GUI: on-device WASM translation of foreign text in place, with hover to toggle between the original and the translation.",
   "type": "module",
   "main": "./index.js",
@@ -10,6 +10,7 @@
     "./package.json": "./package.json"
   },
   "files": [
+    "metrics.mjs",
     "index.js",
     "client.js",
     "cordis.patch.yml",

@@ -95,30 +95,33 @@ function Get-Status {
     url = 'https://gitee.com/nysjn/dsh-auto-translate'
   }
 
-  # ---- npm registry ----
-  $meta = $null
-  $err = ''
-  $raw = (& npm view $name --json 2>$null | Out-String)
-  if ($raw -and $raw -match '\{') {
-    try { $meta = $raw | ConvertFrom-Json } catch { $err = $_.Exception.Message }
+  # ---- public metrics: single source of truth ----
+  # One collector (metrics.mjs; plain HTTP, no npm/dsh child process needed) feeds this
+  # panel, the HTML dashboard and the host route. Keep this file pure ASCII: Windows
+  # PowerShell 5.1 reads BOM-less UTF-8 as the ANSI codepage and mangles non-ASCII text.
+  $metrics = $null
+  $metricsErr = ''
+  $nodeExe = (Get-Command node -ErrorAction SilentlyContinue).Source
+  if (-not $nodeExe) {
+    $metricsErr = 'node not found on PATH'
   } else {
-    $err = (($raw -split "`n") | Where-Object { $_ } | Select-Object -First 1)
-    if (-not $err) { $err = 'query returned nothing' }
+    $json = (& $nodeExe (Join-Path $root 'metrics.mjs') --json 2>$null | Out-String)
+    if ($json -and $json -match '\{') {
+      try { $metrics = $json | ConvertFrom-Json } catch { $metricsErr = $_.Exception.Message }
+    } else {
+      $metricsErr = 'metrics.mjs returned nothing'
+    }
   }
-  # npm writes an error object ({"error":{...}}) to STDOUT on E404 or an unreachable
-  # registry, so the '{' probe alone is not proof of success. Treat a missing version
-  # as a failed query as well, otherwise the drift line falls into the wrong branch.
-  if ($meta -and (-not $meta.version)) {
-    $meta = $null
-    if (-not $err) { $err = 'registry returned no version (see npm error output)' }
-  }
-  if ($meta) {
+
+  # ---- npm registry (from metrics) ----
+  if ($metrics -and $metrics.pkg -and $metrics.pkg.latest) {
     $out.npm = [ordered]@{
-      ok = $true; version = $meta.version; shasum = $meta.dist.shasum
-      modified = $meta.time.modified; files = $meta.dist.fileCount
+      ok = $true; version = $metrics.pkg.latest; shasum = $metrics.pkg.shasum
+      modified = $metrics.pkg.modified; files = $metrics.pkg.fileCount
       url = "https://www.npmjs.com/package/$name"
     }
   } else {
+    $err = $(if ($metrics -and $metrics.pkgError) { $metrics.pkgError } else { $metricsErr })
     $out.npm = [ordered]@{ ok = $false; err = $err; url = "https://www.npmjs.com/package/$name" }
   }
 
@@ -164,25 +167,22 @@ function Get-Status {
     }
   } else { $out.tgz = $null }
 
-  # ---- metrics: npm downloads + gitee stars (public APIs, no credentials) ----
-  $weekTxt = 'n/a'; $monthTxt = 'n/a'; $dlNote = ''
-  try {
-    $w = Invoke-RestMethod "https://api.npmjs.org/downloads/point/last-week/$name" -TimeoutSec 20
-    $weekTxt = '' + $w.downloads
-  } catch { $dlNote = 'npm download stats not available yet (npm delays counting for new packages)' }
-  try {
-    $m = Invoke-RestMethod "https://api.npmjs.org/downloads/point/last-month/$name" -TimeoutSec 20
-    $monthTxt = '' + $m.downloads
-  } catch { }
+  # ---- usage metrics (same metrics.mjs payload as above) ----
+  $dl = $(if ($metrics) { $metrics.downloads } else { $null })
   $out.metrics = [ordered]@{
-    week  = $weekTxt
-    month = $monthTxt
-    note  = $dlNote
+    day   = $(if ($dl -and ($null -ne $dl.day))   { '' + $dl.day }   else { 'n/a' })
+    week  = $(if ($dl -and ($null -ne $dl.week))  { '' + $dl.week }  else { 'n/a' })
+    month = $(if ($dl -and ($null -ne $dl.month)) { '' + $dl.month } else { 'n/a' })
+    perVersion = $(if ($dl -and $dl.perVersion) {
+        (($dl.perVersion.PSObject.Properties |
+          Sort-Object { [int]$_.Value } -Descending |
+          ForEach-Object { $_.Name + '=' + $_.Value }) -join '  ')
+      } else { '' })
+    note  = $(if ($metrics -and $metrics.downloadsError) { 'download stats unavailable: ' + $metrics.downloadsError } else { '' })
   }
-  try {
-    $g = Invoke-RestMethod 'https://gitee.com/api/v5/repos/nysjn/dsh-auto-translate' -TimeoutSec 20
-    $out.metrics.gitee = "stars $($g.stargazers_count) | forks $($g.forks_count) | watch $($g.watchers_count) | open issues $($g.open_issues_count)"
-  } catch {
+  if ($metrics -and $metrics.gitee) {
+    $out.metrics.gitee = "stars $($metrics.gitee.star) | forks $($metrics.gitee.fork) | watch $($metrics.gitee.watch) | open issues $($metrics.gitee.issue)"
+  } else {
     $out.metrics.gitee = "$WARN gitee metrics unavailable"
   }
   $out.metrics.views = 'not published by npm or Gitee (repo traffic page is owner-only)'
@@ -239,8 +239,10 @@ function Render($s) {
   Row 'local vs npm' $s.npm.drift.msg $s.npm.drift.color
 
   Section 'USAGE METRICS'
+  Row 'dl / day' $s.metrics.day $(if ($s.metrics.day -eq 'n/a') { 'Yellow' } else { 'Green' })
   Row 'dl / week' $s.metrics.week $(if ($s.metrics.week -eq 'n/a') { 'Yellow' } else { 'Green' })
   Row 'dl / month' $s.metrics.month $(if ($s.metrics.month -eq 'n/a') { 'Yellow' } else { 'Green' })
+  if ($s.metrics.perVersion) { Row 'per-version' $s.metrics.perVersion 'Cyan' }
   Row 'gitee' $s.metrics.gitee
   Row 'views' $s.metrics.views 'DarkGray'
   if ($s.metrics.note) {

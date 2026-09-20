@@ -21,10 +21,32 @@ test('package.json 声明了 DSH 双面插件契约', () => {
   assert.equal(pkg.exports['./client'], './client.js')
   assert.equal(pkg.exports['.'], './index.js')
   // 包内容契约：宿主/客户端/vendor 运行时必须随包；74MB 的 wasm 刻意不随包（首次使用时 CDN 兜底）
-  for (const need of ['index.js', 'client.js', 'cordis.patch.yml', 'vendor/worker.v5.js', 'vendor/transformers.esm.v2.js']) {
+  for (const need of ['index.js', 'client.js', 'cordis.patch.yml', 'metrics.mjs', 'vendor/worker.v5.js', 'vendor/transformers.esm.v2.js']) {
     assert.ok(pkg.files.includes(need), 'files 应包含 ' + need)
   }
   assert.ok(!pkg.files.some((f) => f.endsWith('.wasm')), 'wasm 不应随包（CDN 兜底或 npm run fetch-vendor）')
+})
+
+test('metrics.mjs 是唯一指标入口，且对失败来源不抛错', async () => {
+  const m = await import('../metrics.mjs')
+  for (const fn of ['collectMetrics', 'renderMetricsText', 'sortedVersions']) {
+    assert.equal(typeof m[fn], 'function', 'metrics.mjs 应导出 ' + fn)
+  }
+  // 逐版本排序：从高到低，忽略非数字
+  assert.deepEqual(m.sortedVersions({ '0.2.0': 149, '0.2.2': 38, '0.2.1': 97 }), [['0.2.0', 149], ['0.2.1', 97], ['0.2.2', 38]])
+  assert.deepEqual(m.sortedVersions(null), [])
+  // 渲染对缺字段的载荷必须健壮（全部字段缺失也不得抛错）
+  const text = m.renderMetricsText({ name: 'x', pkg: null, pkgError: 'HTTP 404', downloads: {}, gitee: null, giteeError: 'timeout', fetchedAt: 'now' })
+  assert.match(text, /HTTP 404/)
+  assert.match(text, /timeout/)
+  assert.match(text, /day -/)
+  // 宿主半必须经这一个入口取指标（不允许各处再自己 fetch 外部 API）
+  const idx = read('index.js')
+  assert.match(idx, /import \{ collectMetrics \} from '\.\/metrics\.mjs'/, 'index.js 应导入 metrics.mjs')
+  assert.match(idx, /path: METRICS_PATH/, '应注册指标路由')
+  for (const f of ['scripts/dashboard.mjs', 'scripts/status.ps1']) {
+    assert.match(read(f), /metrics\.mjs/, f + ' 应复用 metrics.mjs 而非自己写一套')
+  }
 })
 
 test('cordis.patch.yml 是纯 insert（保证可热挂载）', () => {

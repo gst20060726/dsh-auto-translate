@@ -685,6 +685,39 @@ test('E2E 0.4.0 迁移: 旧的「关闭」配置迁移后保持不翻译', { ski
   }
 })
 
+test('E2E 0.4.1 迁移: 沿用旧默认上限(1200)的用户被搬到 4000，自己改过的不动', { skip }, async () => {
+  const dom = new JSDOM('<!doctype html><html><body><p>Hello world.</p></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true })
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      version: 5, engine: 'hover', hoverEngine: 'local', selectionMode: 'popup',
+      selMaxChars: 1200, target: 'zh', latinSource: 'en', minChars: 2, lang: 'zh', enabled: true,
+    }))
+    const mod = loadClientInto(window)
+    mod.apply({})
+    assert.equal(mod.__test.settings.selMaxChars, 4000, '旧默认 1200 应被搬到 4000')
+    assert.equal(mod.__test.settings.selChunkChars, 600, '应补上分块粒度默认值')
+  } finally {
+    window.close()
+  }
+
+  const dom2 = new JSDOM('<!doctype html><html><body><p>Hello world.</p></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true })
+  const w2 = dom2.window
+  try {
+    w2.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      version: 5, engine: 'hover', hoverEngine: 'local', selectionMode: 'popup',
+      selMaxChars: 800, target: 'zh', latinSource: 'en', minChars: 2, lang: 'zh', enabled: true,
+    }))
+    const mod2 = loadClientInto(w2)
+    mod2.apply({})
+    assert.equal(mod2.__test.settings.selMaxChars, 800, '用户自己改过的上限不得被迁移覆盖')
+  } finally {
+    w2.close()
+  }
+})
+
 test('E2E 0.4.0: 头部模式条反映「由谁翻 + 框选方式」，且不再有自动引擎选择器', { skip }, async () => {
   const dom = new JSDOM('<!doctype html><html><body><p>Hello world.</p></body></html>', { url: 'http://127.0.0.1:3080/' })
   const { window } = dom

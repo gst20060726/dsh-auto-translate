@@ -102,6 +102,15 @@ window.__ModuleLoader__.load({
 			if (!settings.selectionMode) settings.selectionMode = 'popup';
 			saveSettings();
 		}
+		// v6 迁移：0.4.0 曾把「框选上限」的默认值写成 1200 并随之落盘（v5 迁移会 saveSettings），
+		// 若不搬走，升级到 0.4.1 的用户仍然只能翻 1200 字符。只搬「正好等于旧默认值」的那一种，
+		// 用户自己改过的值（例如 45 / 8000 / 0）一律原样保留。
+		if (!settings.version || settings.version < 6) {
+			settings.version = 6;
+			if (Number(settings.selMaxChars) === 1200) settings.selMaxChars = 4000;
+			if (!settings.selChunkChars) settings.selChunkChars = 600;
+			saveSettings();
+		}
 
 		// ===================== 译文缓存 =====================
 		var cache = new Map();

@@ -71,7 +71,7 @@ async function waitFor(fn, timeout = 6000, step = 40) {
   return false
 }
 
-test('E2E: 翻译 → 悬停切回原文 → 观察者不覆盖 → 再悬停切回译文', { skip }, async () => {
+test('E2E 0.4.0: 悬停翻译 → 再悬停切回原文 → 观察者不覆盖 → 再悬停切回译文', { skip }, async () => {
   const dom = new JSDOM(
     '<!doctype html><html><body><div id="app"><p id="t">Hello world, this needs translation.</p></div></body></html>',
     { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true },
@@ -79,7 +79,8 @@ test('E2E: 翻译 → 悬停切回原文 → 观察者不覆盖 → 再悬停切
   const { window } = dom
   try {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      version: 4, engine: 'local', target: 'zh', latinSource: 'en', hoverDelayMs: 0, minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
+      version: 5, engine: 'hover', hoverEngine: 'local', target: 'zh', latinSource: 'en',
+      hoverDelayMs: 0, minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
     }))
     // jsdom 没有布局：给所有元素一个"可见"矩形，否则视口门控会全部跳过
     window.Element.prototype.getBoundingClientRect = function () {
@@ -94,35 +95,42 @@ test('E2E: 翻译 → 悬停切回原文 → 观察者不覆盖 → 再悬停切
     mod.apply({})
     assert.ok(window.document.getElementById('dsh-auto-translate-root'), '面板应已挂载')
 
-    // 1) 自动翻译（需等 400ms 稳定期 + 一次"翻译"往返）
-    assert.ok(await waitFor(() => node.nodeValue !== original), '应在稳定期后完成翻译，实际: ' + JSON.stringify(node.nodeValue))
+    // 0) 0.4.0：加载后绝不自动翻译（这也是「不污染正常使用体验」的核心）
+    await sleep(500)
+    assert.equal(node.nodeValue, original, '不得自动翻译整页，实际: ' + JSON.stringify(node.nodeValue))
+
+    // 1) 第一次悬停 → 翻译该块
+    p.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+    assert.ok(await waitFor(() => node.nodeValue !== original), '悬停后应翻译，实际: ' + JSON.stringify(node.nodeValue))
     assert.match(node.nodeValue, /ZH</, '应写入译文')
     assert.equal(p.getAttribute('data-dsh-at'), 'translated', '宿主元素应被标记')
 
-    // 2) 悬停 → 切回原文
+    // 2) 移开再悬停同一块 → 切回原文
+    p.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true, relatedTarget: window.document.body }))
+    await sleep(60)
     p.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
-    assert.ok(await waitFor(() => node.nodeValue === original, 2500), '悬停后应切回原文，实际: ' + JSON.stringify(node.nodeValue))
+    assert.ok(await waitFor(() => node.nodeValue === original, 2500), '再次悬停应切回原文，实际: ' + JSON.stringify(node.nodeValue))
 
     // 3) 关键回归：等远超稳定窗口，确认观察者没有把原文覆盖成译文
     await sleep(1300)
     assert.equal(node.nodeValue, original, '切回原文后必须保持原文（观察者不得覆盖）')
 
-    // 4) 移开再悬停 → 切回译文
+    // 4) 再悬停 → 切回译文
     p.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true, relatedTarget: window.document.body }))
     await sleep(60)
     p.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
-    assert.ok(await waitFor(() => /ZH</.test(node.nodeValue), 2500), '再次悬停应切回译文，实际: ' + JSON.stringify(node.nodeValue))
+    assert.ok(await waitFor(() => /ZH</.test(node.nodeValue), 2500), '第三次悬停应切回译文，实际: ' + JSON.stringify(node.nodeValue))
   } finally {
     window.close()
   }
 })
 
-test('E2E: 流式追加的文本只在稳定后才翻译（不与追加剧烈打架）', { skip }, async () => {
+test('E2E 0.4.0: 悬停模式下流式追加的文本不会被自动翻译（不打扰正常使用）', { skip }, async () => {
   const dom = new JSDOM('<!doctype html><html><body><p id="s">Streaming</p></body></html>', { url: 'http://127.0.0.1:3080/' })
   const { window } = dom
   try {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      version: 4, engine: 'local', target: 'zh', latinSource: 'en', minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
+      version: 5, engine: 'hover', hoverEngine: 'local', target: 'zh', latinSource: 'en', minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
     }))
     window.Element.prototype.getBoundingClientRect = function () {
       return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
@@ -137,17 +145,16 @@ test('E2E: 流式追加的文本只在稳定后才翻译（不与追加剧烈打
       await sleep(60)
     }
     const settled = 'Streaming sentence part 7'
-    // 追加剧烈期间不应写入译文（否则会与追加互相覆盖）
-    await sleep(120)
-    assert.equal(node.nodeValue, settled, '追加期间不应改写文本')
-    // 停止追加后，应在稳定期内被翻译
-    assert.ok(await waitFor(() => /ZH</.test(node.nodeValue), 3000), '停止追加后应翻译，实际: ' + JSON.stringify(node.nodeValue))
+    // 停止追加后（远超稳定窗口）也不得被改写：按需模式不主动碰任何文本
+    await sleep(1500)
+    assert.equal(node.nodeValue, settled, '按需模式不得改写页面文本，实际: ' + JSON.stringify(node.nodeValue))
+    assert.equal(p.getAttribute('data-dsh-at'), null, '不得给未翻译的块打标记')
   } finally {
     window.close()
   }
 })
 
-test('E2E: 切换引擎时必须先把已翻译的页面还原成原文（不留孤儿译文）', { skip }, async () => {
+test('E2E 0.4.0: 切换引擎时必须先把已翻译的页面还原成原文（不留孤儿译文）', { skip }, async () => {
   const dom = new JSDOM(
     '<!doctype html><html><body><div id="a"><p id="p1">Hello world, this needs translation.</p></div></body></html>',
     { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true },
@@ -155,7 +162,7 @@ test('E2E: 切换引擎时必须先把已翻译的页面还原成原文（不留
   const { window } = dom
   try {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      version: 4, engine: 'local', target: 'zh', latinSource: 'en',
+      version: 5, engine: 'hover', hoverEngine: 'local', target: 'zh', latinSource: 'en',
       hoverDelayMs: 100, minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
     }))
     window.Element.prototype.getBoundingClientRect = function () {
@@ -167,8 +174,9 @@ test('E2E: 切换引擎时必须先把已翻译的页面还原成原文（不留
     const mod = loadClientInto(window)
     mod.apply({})
 
-    // 等自动翻译把这一块翻出来
-    assert.ok(await waitFor(() => /ZH</.test(node.nodeValue), 4000), '应该自动翻译，实际: ' + JSON.stringify(node.nodeValue))
+    // 悬停把这一块翻出来
+    p1.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+    assert.ok(await waitFor(() => /ZH</.test(node.nodeValue), 4000), '悬停后应翻译，实际: ' + JSON.stringify(node.nodeValue))
 
     // 模拟用户切换引擎：实现里走 resetTranslationState(true)
     mod.__test.resetTranslationState(true)
@@ -296,7 +304,7 @@ test('E2E 悬停模式: 加载后不自动翻译任何内容，悬停后才翻�
   }
 })
 
-test('E2E: 页面重渲染后可摘掉死记录（还原不再被死节点拖住）', { skip }, async () => {
+test('E2E 0.4.0: 页面重渲染后可摘掉死记录（还原不再被死节点拖住）', { skip }, async () => {
   const dom = new JSDOM(
     '<!doctype html><html><body><div id="a"><p id="p1">Hello world, this needs translation.</p><p id="p2">Another sentence for translation.</p></div></body></html>',
     { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true },
@@ -304,8 +312,8 @@ test('E2E: 页面重渲染后可摘掉死记录（还原不再被死节点拖住
   const { window } = dom
   try {
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      version: 4, engine: 'local', target: 'zh', latinSource: 'en',
-      minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
+      version: 5, engine: 'hover', hoverEngine: 'local', target: 'zh', latinSource: 'en',
+      hoverDelayMs: 0, minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
     }))
     window.Element.prototype.getBoundingClientRect = function () {
       return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
@@ -315,9 +323,11 @@ test('E2E: 页面重渲染后可摘掉死记录（还原不再被死节点拖住
     const mod = loadClientInto(window)
     mod.apply({})
 
-    // 两句都被翻译
-    assert.ok(await waitFor(() => /ZH</.test(p1.firstChild.nodeValue) && /ZH</.test(p2.firstChild.nodeValue), 5000),
-      '两句都应被翻译')
+    // 分别悬停两句 → 都被翻译
+    p1.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+    assert.ok(await waitFor(() => /ZH</.test(p1.firstChild.nodeValue), 4000), 'p1 悬停后应被翻译')
+    p2.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+    assert.ok(await waitFor(() => /ZH</.test(p2.firstChild.nodeValue), 4000), 'p2 悬停后应被翻译')
 
     // 模拟重渲染：整块替换掉 p1（它上面的记录随之变成死记录）
     const fresh = window.document.createElement('p')
@@ -333,6 +343,220 @@ test('E2E: 页面重渲染后可摘掉死记录（还原不再被死节点拖住
     const restored = mod.__test.revertTranslatedNodes()
     assert.ok(restored >= 1, '剩余记录仍应能被还原，实际 ' + restored)
     assert.equal(p2.firstChild.nodeValue, 'Another sentence for translation.', 'p2 应回到原文')
+  } finally {
+    window.close()
+  }
+})
+
+/** 在 jsdom 里造一个「真实」的文本选区（jsdom 没有布局，Range 的矩形要手动给） */
+function selectText(window, node, start, end) {
+  window.Range.prototype.getBoundingClientRect = function () {
+    return { width: 160, height: 18, top: 40, left: 20, right: 180, bottom: 58, x: 20, y: 40 }
+  }
+  const range = window.document.createRange()
+  range.setStart(node, start)
+  range.setEnd(node, end)
+  const sel = window.getSelection()
+  sel.removeAllRanges()
+  sel.addRange(range)
+  return range
+}
+
+function hoverSettings(extra) {
+  return JSON.stringify(Object.assign({
+    version: 5, engine: 'hover', hoverEngine: 'local', target: 'zh', latinSource: 'en',
+    hoverDelayMs: 0, minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
+    selectionMode: 'popup', selectionMinChars: 4,
+  }, extra || {}))
+}
+
+test('E2E 0.4.0 框选翻译: 拖选文字松手 → 浮层显示译文', { skip }, async () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><body><p id="p1">Hello world, this needs translation.</p></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true },
+  )
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, hoverSettings())
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const p1 = window.document.getElementById('p1')
+    const node = p1.firstChild
+    const mod = loadClientInto(window)
+    mod.apply({})
+
+    selectText(window, node, 0, 11)                    // "Hello world"
+    p1.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true }))
+
+    const root = window.document.getElementById('dsh-auto-translate-root')
+    let pop = null
+    assert.ok(await waitFor(() => { pop = root.shadowRoot.querySelector('.selpop'); return !!pop }, 3000), '浮层应出现')
+    assert.ok(await waitFor(() => pop.classList.contains('on') && /ZH</.test(pop.textContent), 4000),
+      '松手后浮层应显示译文，实际: ' + JSON.stringify(pop && pop.textContent))
+    assert.match(pop.querySelector('.src').textContent, /Hello world/, '浮层应带上原文')
+    // 页面本身不得被改动
+    assert.equal(node.nodeValue, 'Hello world, this needs translation.', '框选不得改动页面原文')
+  } finally {
+    window.close()
+  }
+})
+
+test('E2E 0.4.0 框选翻译: 在别处松手/点击不会翻出上一次遗留的选区', { skip }, async () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><body><p id="p1">Hello world, this needs translation.</p><p id="p2">Second paragraph.</p></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true },
+  )
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, hoverSettings())
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const mod = loadClientInto(window)
+    mod.apply({})
+    const p1 = window.document.getElementById('p1')
+    const p2 = window.document.getElementById('p2')
+    const root = window.document.getElementById('dsh-auto-translate-root')
+
+    // 选区留在 p1，但松手发生在 p2（例如点了个按钮/链接）
+    selectText(window, p1.firstChild, 0, 11)
+    p2.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true }))
+    await sleep(300)
+    const pop = root.shadowRoot.querySelector('.selpop')
+    assert.ok(!pop || !pop.classList.contains('on'), '遗留选区不得触发浮层')
+  } finally {
+    window.close()
+  }
+})
+
+test('E2E 0.4.0 框选翻译: 「就地替换」后点击页面即还原原文', { skip }, async () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><body><p id="p1">Hello world, this needs translation.</p></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true },
+  )
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, hoverSettings({ selectionMode: 'inline' }))
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const p1 = window.document.getElementById('p1')
+    const mod = loadClientInto(window)
+    mod.apply({})
+
+    selectText(window, p1.firstChild, 0, 11)
+    p1.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true }))
+    assert.ok(await waitFor(() => mod.__test.inlineCount() === 1, 4000), '应产生一处就地替换')
+    const span = p1.querySelector('span[data-dsh-at-sel]')
+    assert.ok(span, '原文位置应出现被替换的片段')
+    assert.match(span.textContent, /ZH</, '片段内容应是译文')
+    assert.equal(p1.textContent, 'ZH< Hello world >, this needs translation.', '其余原文保持不变')
+
+    // 点击页面（面板之外）→ 还原
+    window.document.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true }))
+    assert.equal(mod.__test.inlineCount(), 0, '点击后应收回就地替换')
+    assert.equal(p1.textContent, 'Hello world, this needs translation.', '应完整还原为原文')
+  } finally {
+    window.close()
+  }
+})
+
+test('E2E 0.4.0 框选翻译: 输入框 / 代码块 / 面板自身的选区一律不翻', { skip }, async () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><body><input id="i" value="Hello world"><pre id="c">const a = 1</pre><p id="p">Hello world, this needs translation.</p></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true },
+  )
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, hoverSettings())
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const mod = loadClientInto(window)
+    mod.apply({})
+    const t = mod.__test
+    assert.equal(t.selectionBlocked(window.document.getElementById('c').firstChild.parentElement), true, '代码块不翻')
+    assert.equal(t.selectionBlocked(window.document.getElementById('i')), true, '输入框不翻')
+    assert.equal(t.selectionBlocked(window.document.getElementById('p')), false, '普通段落可翻')
+
+    // 面板自身（Shadow DOM 宿主）也不翻
+    const root = window.document.getElementById('dsh-auto-translate-root')
+    assert.equal(t.selectionBlocked(root), true, '插件面板不翻自己')
+  } finally {
+    window.close()
+  }
+})
+
+test('E2E 0.4.0 迁移: 旧的「自动/local」配置升级后变成「按需 + 本机离线」，绝不自动翻页', { skip }, async () => {
+  const dom = new JSDOM('<!doctype html><html><body><p id="p">Hello world, this needs translation.</p></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true })
+  const { window } = dom
+  try {
+    // 老版本（v4）的设置：engine 是「自动全页翻译」那套取值
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      version: 4, engine: 'local', target: 'zh', latinSource: 'en', hoverDelayMs: 0,
+      minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
+    }))
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const node = window.document.getElementById('p').firstChild
+    const original = node.nodeValue
+    const mod = loadClientInto(window)
+    mod.apply({})
+
+    assert.equal(mod.__test.settings.engine, 'hover', 'engine 必须归位为按需触发')
+    assert.equal(mod.__test.settings.hoverEngine, 'local', '旧的 local/auto 应迁移成本机离线后端')
+    assert.equal(mod.__test.settings.selectionMode, 'popup', '应写入框选模式的默认值')
+    await sleep(600)
+    assert.equal(node.nodeValue, original, '迁移后绝不自动翻译整页，实际: ' + JSON.stringify(node.nodeValue))
+  } finally {
+    window.close()
+  }
+})
+
+test('E2E 0.4.0 迁移: 旧的「关闭」配置迁移后保持不翻译', { skip }, async () => {
+  const dom = new JSDOM('<!doctype html><html><body><p id="p">Hello world, this needs translation.</p></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true })
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      version: 4, engine: 'off', target: 'zh', latinSource: 'en', minChars: 2, lang: 'zh', enabled: true, cacheLimit: 50,
+    }))
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const mod = loadClientInto(window)
+    mod.apply({})
+    assert.equal(mod.__test.settings.engine, 'hover')
+    assert.equal(mod.__test.settings.enabled, false, '旧的「关闭」不得被悄悄打开')
+  } finally {
+    window.close()
+  }
+})
+
+test('E2E 0.4.0: 头部模式条反映「由谁翻 + 框选方式」，且不再有自动引擎选择器', { skip }, async () => {
+  const dom = new JSDOM('<!doctype html><html><body><p>Hello world.</p></body></html>', { url: 'http://127.0.0.1:3080/' })
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, hoverSettings({ selectionMode: 'inline' }))
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const mod = loadClientInto(window)
+    mod.apply({})
+    const root = window.document.getElementById('dsh-auto-translate-root')
+    const card = root.shadowRoot.querySelector('.card')
+    assert.ok(card, '面板应存在')
+    assert.equal(card.querySelector('[data-set="engine"]'), null, '0.4.0 起不再提供「自动翻译」引擎选择器')
+    assert.ok(card.querySelector('[data-set="hoverEngine"]'), '应提供「由谁翻」的后端选择器')
+    assert.equal(card.querySelectorAll('details.grp').length, 4, '常用/引擎/高级/诊断 四个可折叠分组')
+    assert.equal(card.querySelector('details.grp[open]').getAttribute('data-grp'), 'common', '默认只展开「常用」')
+
+    const line = card.querySelector('[data-el="modeText"]').textContent
+    assert.match(line, /就地替换/, '模式条应显示框选方式，实际: ' + line)
+    assert.match(mod.__test.modeText(), /本机离线/, '模式条应显示当前后端，实际: ' + mod.__test.modeText())
   } finally {
     window.close()
   }

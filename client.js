@@ -24,8 +24,12 @@ window.__ModuleLoader__.load({
 			enabled: true,
 			target: 'zh',
 			hoverDelayMs: 600,
-			engine: 'hover',         // hover(按需悬停翻译) | auto | ondevice | online | custom | local | off
-			hoverEngine: 'local',    // 悬停模式实际用哪个引擎：local | online | custom
+			engine: 'hover',         // 触发方式：恒为 hover（按需）。0.4.0 起取消自动全页翻译
+			hoverEngine: 'local',    // 按需翻译用哪个引擎：local | online | custom
+			selectionMode: 'popup',  // 框选翻译呈现：popup(浮层) | inline(就地替换) | off
+			selectionMinChars: 8,    // 框选至少这么多字符才触发
+			selMaxChars: 1200,       // 单次框选翻译的字符上限（超出的部分不翻，避免拖垮引擎）
+			slimPanel: false,        // 面板「窄」模式：更小、更不挡内容
 			onlineOrder: 'mymemory', // mymemory(此网络可达) | google(部分网络不可达)
 			endpoint: '',            // 自定义端点模板：https://host/translate?q={text}&target={target}&source={source}
 			maxChunk: 1000,
@@ -79,6 +83,22 @@ window.__ModuleLoader__.load({
 		if (!settings.version || settings.version < 4) {
 			settings.version = 4;
 			settings.engine = 'hover';
+			saveSettings();
+		}
+		// v5 迁移：彻底取消「自动全页翻译」——触发方式恒为按需（悬停 / 框选），
+		// 引擎选择只决定「由谁来翻」。旧配置里任何会自动整页翻译的 engine 一律归位。
+		if (!settings.version || settings.version < 5) {
+			settings.version = 5;
+			if (settings.engine !== 'hover') {
+				// 旧值是 auto/local/online/ondevice/custom/off：把「用哪个引擎」搬到 hoverEngine，
+				// 避免用户升级后丢掉原本想用的引擎。
+				if (settings.engine === 'online') settings.hoverEngine = 'online';
+				else if (settings.engine === 'custom' || settings.engine === 'http') settings.hoverEngine = 'custom';
+				else if (settings.engine === 'local' || settings.engine === 'auto') settings.hoverEngine = 'local';
+				else if (settings.engine === 'off') settings.enabled = false;   // 旧的「关闭」= 不想翻译，迁移成「未启用」而不是悄悄打开
+			}
+			settings.engine = 'hover';
+			if (!settings.selectionMode) settings.selectionMode = 'popup';
 			saveSettings();
 		}
 
@@ -408,7 +428,10 @@ window.__ModuleLoader__.load({
 			if (mode === 'online') return withTimeout(translateLong(onlineTranslate, text, src, tgt, 480), 12000, '在线翻译');
 			if (mode === 'ondevice') return withTimeout(onDeviceTranslate(text, src, tgt), 8000, '端侧翻译');
 			if (mode === 'off') return text;
-			// 悬停模式：engine 本身只是「触发方式」，真正用哪个引擎看宿主上的标记；默认本机离线
+			// 悬停/框选模式：engine 只是「触发方式」（恒为 hover），真正用哪个引擎看 hoverEngine
+			var back = settings.hoverEngine;
+			if (back === 'online') return withTimeout(translateLong(onlineTranslate, text, src, tgt, 480), 12000, '在线翻译');
+			if (back === 'custom') return translateLong(httpTranslate, text, src, tgt);
 			return translateLong(localTranslate, text, src, tgt, 600);
 		}
 
@@ -1184,19 +1207,19 @@ window.__ModuleLoader__.load({
 			if (statusEl) statusEl.textContent = (anyOriginal ? '已全部切回译文' : '已全部切回原文') + '（' + records.length + ' 处）';
 		}
 		var HELP_TEXT = [
-			'【自动翻译 · 使用指南】',
+			'【按需翻译 · 使用指南】',
 			'',
-			'· 自动工作:页面上的外语文本就地替换为目标语言',
-			'· 悬停约 0.6 秒:该块在「译文 ↔ 原文」之间来回切换',
-			'· Alt + 悬停:立即切换(不必等 0.6 秒)',
+			'· 不会自动翻译整页：只在下面这两种主动操作时才会翻译',
+			'· 悬停翻译:鼠标停在某一块上约 0.6 秒 → 该块就地换成译文；再停一次 → 换回原文',
+			'· Alt + 悬停:立即触发(不必等 0.6 秒)',
+			'· 框选翻译:拖选文字后松手 → 浮层显示译文(可在面板里改成「就地替换」)',
 			'· Ctrl+Alt+T:呼出/关闭本面板(圆点找不到时用这个)',
 			'· Ctrl+Alt+H:显示/隐藏左下角圆点',
-			'· Ctrl+Alt+P:暂停 / 恢复翻译(暂停会还原原文)',
+			'· Ctrl+Alt+P:暂停 / 恢复(暂停会还原所有译文)',
 			'',
-			'【引擎】',
+			'【引擎（只决定由谁来翻）】',
 			'· 本机离线(推荐):浏览器内 WASM 推理,零 token、不限量、文本不出本机;首次需下载模型',
 			'· 在线免密钥:MyMemory,免 key 但有每日额度限制',
-			'· 端侧:浏览器内置 Translator(需要能连 Google 组件服务器,多数国内网络不可用)',
 			'· 自定义端点:填你自己的翻译服务模板,如 ?q={text}&target={target}&source={source}',
 			'',
 			'【本地模型】',
@@ -1214,6 +1237,7 @@ window.__ModuleLoader__.load({
 		}
 		// 只把「当前显示着译文」的节点改回原文（不动任何状态）
 		function revertTranslatedNodes() {
+			restoreInlineSelections();   // 框选「就地替换」的片段也一起还原
 			pruneDeadRecords();   // 先摘掉页面已重渲染掉的死记录，否则「还原原文」会看起来漏掉一些块
 			var n = 0;
 			for (var i = 0; i < records.length; i++) {
@@ -1246,11 +1270,208 @@ window.__ModuleLoader__.load({
 			} catch (e) { }
 		}
 
+		// ===================== 框选翻译（主动触发；从不自动翻页） =====================
+		var hostSr = null, selPopEl = null, selSrcEl = null, selDstEl = null;
+		var selBusy = false, selSeq = 0, inlineSpans = [];
+		function buildSelPop() {
+			if (selPopEl || !hostSr) return;
+			var box = document.createElement('div');
+			box.className = 'selpop';
+			box.innerHTML = '<div class="src" data-el="src"></div>'
+				+ '<div class="dst" data-el="dst"></div>'
+				+ '<div class="bar"><button data-act="selCopy" data-i18n="copyDiag"></button><button data-act="selClose" data-i18n="selClose"></button></div>';
+			selPopEl = box;
+			selSrcEl = box.querySelector('[data-el="src"]');
+			selDstEl = box.querySelector('[data-el="dst"]');
+			box.addEventListener('click', function (e) {
+				var b = e.target && e.target.closest ? e.target.closest('[data-act]') : null;
+				if (!b) return;
+				var act = b.getAttribute('data-act');
+				if (act === 'selClose') hideSelPop();
+				else if (act === 'selCopy') {
+					var txt = selDstEl ? selDstEl.textContent : '';
+					try { navigator.clipboard.writeText(txt); } catch (err) { }
+					b.textContent = '✓';
+				}
+			});
+			hostSr.appendChild(box);
+			applyI18n();
+		}
+		function hideSelPop() {
+			if (selPopEl) selPopEl.classList.remove('on');
+			selBusy = false;
+			selSeq++;
+		}
+		function positionSelPop(rect) {
+			if (!selPopEl) return;
+			var w = window.innerWidth || 1200, h = window.innerHeight || 800;
+			var left = Math.max(6, Math.min(rect.left, Math.max(6, w - 336)));
+			var top = rect.bottom + 8;
+			if (top + 150 > h - 6) top = Math.max(6, rect.top - 158);
+			selPopEl.style.left = left + 'px';
+			selPopEl.style.top = top + 'px';
+		}
+		function showSelPop(rect, srcText, dstText) {
+			buildSelPop();
+			if (!selPopEl) return;
+			positionSelPop(rect);
+			selSrcEl.textContent = srcText.length > 600 ? srcText.slice(0, 600) + ' …' : srcText;
+			selDstEl.textContent = dstText;
+			selPopEl.classList.add('on');
+		}
+		// 输入框 / 代码块 / 面板自身 / contenteditable 一律不翻（与悬停的跳过规则保持一致）
+		function selectionBlocked(el) {
+			if (!el || el.nodeType !== 1) return true;
+			var cur = el;
+			while (cur && cur.nodeType === 1 && cur !== document.body) {
+				if (SKIP_TAGS[cur.tagName]) {
+					var keep = settings.translateCode && (cur.tagName === 'PRE' || cur.tagName === 'CODE');
+					if (!keep) return true;
+				}
+				if (cur.isContentEditable) return true;
+				cur = cur.parentElement;
+			}
+			return isSkipped(el);
+		}
+		function selectionItem(tgt) {
+			var sel = window.getSelection && window.getSelection();
+			if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+			var range = sel.getRangeAt(0);
+			var text = String(sel.toString() || '').trim();
+			if (text.length < Math.max(1, Number(settings.selectionMinChars) || 1)) return null;
+			var sc = range.startContainer, ec = range.endContainer;
+			var el = sc && (sc.nodeType === 1 ? sc : sc.parentElement);
+			var endEl = ec && (ec.nodeType === 1 ? ec : ec.parentElement);
+			// 松手的位置必须和「当前选区」有关系，否则会把上一次遗留的选区也翻一遍
+			// （用户只是点了别处的链接/按钮，却弹出一个浮层）
+			if (tgt) {
+				var tgtEl = tgt.nodeType === 1 ? tgt : (tgt.parentElement || null);
+				var anc = range.commonAncestorContainer;
+				var ancEl = anc && (anc.nodeType === 1 ? anc : anc.parentElement);
+				var related = !!tgtEl && !!ancEl &&
+					(ancEl === tgtEl || ancEl.contains(tgtEl) || tgtEl.contains(ancEl));
+				if (!related) return null;
+			}
+			if (selectionBlocked(el) || selectionBlocked(endEl)) return null;
+			var rect = null;
+			try { rect = range.getBoundingClientRect(); } catch (e) { }
+			if (!rect || (!rect.width && !rect.height)) return null;
+			return {
+				text: text, rect: rect, range: range,
+				single: sc === ec && sc.nodeType === 3
+			};
+		}
+		// 就地替换只处理「同一文本节点内」的选区；跨节点/跨段落的选区退回浮层
+		function inlineReplaceSelection(item, translated) {
+			if (!item.single) return false;
+			try {
+				var span = document.createElement('span');
+				span.setAttribute('data-dsh-at-sel', '1');
+				span.setAttribute('data-dsh-at-skip', '1');   // 不被悬停/扫描重复翻译
+				span.setAttribute('data-dsh-at-src', item.text);
+				span.style.background = 'rgba(61,220,132,.16)';
+				span.style.borderBottom = '1px dotted rgba(61,220,132,.65)';
+				span.textContent = translated;
+				item.range.deleteContents();
+				item.range.insertNode(span);
+				inlineSpans.push(span);
+				var sel = window.getSelection();
+				if (sel) sel.removeAllRanges();
+				return true;
+			} catch (e) { return false; }
+		}
+		function restoreInlineSelections() {
+			var n = 0;
+			for (var i = 0; i < inlineSpans.length; i++) {
+				var sp = inlineSpans[i];
+				try {
+					if (sp && sp.isConnected && sp.parentNode) {
+						sp.parentNode.replaceChild(document.createTextNode(sp.getAttribute('data-dsh-at-src') || ''), sp);
+						n++;
+					}
+				} catch (e) { }
+			}
+			inlineSpans = [];
+			return n;
+		}
+		async function translateSelectionItem(item) {
+			selBusy = true;
+			var seq = ++selSeq;
+			var text = item.text, clipped = false;
+			var maxChars = Math.max(40, Number(settings.selMaxChars) || 1200);
+			if (text.length > maxChars) { text = text.slice(0, maxChars); clipped = true; }
+			var popup = settings.selectionMode === 'popup';
+			if (popup) showSelPop(item.rect, item.text, t('selWorking'));
+			try {
+				var src = await planSource(text);
+				if (!src) {
+					if (popup) showSelPop(item.rect, item.text, t('selSameLang'));
+					else if (statusEl) statusEl.textContent = t('selSameLang');
+					return;
+				}
+				var out = await translateText(text, src, String(settings.target).split('-')[0]);
+				if (seq !== selSeq && popup) return;                 // 已被新的框选/关闭取代
+				out = String(out || '').trim();
+				if (!out) throw new Error(t('selEmpty'));
+				if (clipped) out += ' …';
+				var inlineOk = false;
+				if (settings.selectionMode === 'inline') {
+					inlineOk = inlineReplaceSelection(item, out);
+					if (!inlineOk) showSelPop(item.rect, item.text, out);   // 跨段落的选区退回浮层
+				} else {
+					showSelPop(item.rect, item.text, out);
+				}
+				stats.chars += text.length;
+				updateStatus();
+				// 状态行文案放在 updateStatus() 之后写，否则会被分段拼接覆盖掉
+				if (statusEl && settings.selectionMode === 'inline') {
+					statusEl.textContent = inlineOk ? t('selDone') + out.slice(0, 60) : t('selInlineFallback');
+				}
+			} catch (e) {
+				var msg = (e && e.message) || String(e);
+				lastError = msg;
+				if (popup) showSelPop(item.rect, item.text, t('selFailed') + msg);
+				else if (statusEl) statusEl.textContent = t('selFailed') + msg;
+				updateStatus();
+			} finally {
+				selBusy = false;
+			}
+		}
+		function onDocMouseUp(e) {
+			if (!settings.enabled || settings.selectionMode === 'off') return;
+			if (e.button && e.button !== 0) return;
+			var tgt = e.target;
+			if (tgt && tgt.closest && tgt.closest('#' + ROOT_ID)) return;
+			// 先让浏览器更新 Selection，再读取
+			setTimeout(function () {
+				if (selBusy) return;
+				var item = selectionItem(tgt);
+				if (!item) return;
+				translateSelectionItem(item);
+			}, 0);
+		}
+		function onDocMouseDown(e) {
+			var tgt = e.target;
+			if (tgt && tgt.closest && tgt.closest('#' + ROOT_ID)) return;   // 面板/浮层内部点击不处理
+			if (inlineSpans.length) restoreInlineSelections();
+			if (selPopEl && selPopEl.classList.contains('on')) hideSelPop();
+		}
+
 		// ===================== 面板国际化（zh / en，auto 跟随浏览器） =====================
 		var I18N = {
 			zh: {
 				chipLabel: '译', cacheLabel: '宿主缓存', clearHostCache: '清空宿主缓存', cacheCleared: '宿主缓存已清空',
 				metricsLabel: '下载量',
+				modeLabel: '当前模式', onDemandNote: '按需触发，永不自动翻译整页',
+				selectionMode: '框选翻译', selPopup: '浮层显示译文', selInline: '就地替换(点击还原)', selOff: '关闭',
+				selectionMinChars: '最少选取字数', selTranslate: '译这段', selClose: '关闭',
+				selWorking: '翻译中…', selSameLang: '这段已经是目标语言了', selEmpty: '引擎没有返回内容',
+				selFailed: '翻译失败：', selDone: '已就地替换：',
+				selInlineFallback: '选区跨了多段，已改用浮层显示',
+				badgeError: ' · 有错误',
+				groupCommon: '常用', groupEngine: '引擎与模型', groupAdvanced: '高级', groupDiag: '诊断与重置',
+				collapseAll: '折叠全部', expandAll: '展开全部', slim: '窄面板',
+				triggerHint: '悬停片刻翻那一块（时长见上）；拖选文字松手即译。两者都只在你主动操作时触发。',
 				translateCode: '也翻译代码/思考块(实验)', avgLatency: '平均 {ms}ms/句',
 				multiTab: '检测到 {n} 个其他标签页(译文缓存共享,内存会翻倍)',
 				workerMode: '推理实例', wmAuto: '自动(共享优先)', multiMode: '多语种策略', mmTwoHop: '两跳(省内存/快)',
@@ -1270,6 +1491,11 @@ window.__ModuleLoader__.load({
 				engineOnline: '在线免密钥', engineCustom: '自定义端点', engineOff: '关闭',
 				footerHint: '悬停 0.6 秒翻译鼠标下那一块；**再次停留同一块**即复原为原文，可反复切换（默认模式）。Alt+悬停可立即触发。快捷键（可改键）：Ctrl+Alt+T 呼出面板 · Ctrl+Alt+H 显示/隐藏圆点 · Ctrl+Alt+P 暂停/恢复。全程不调用大模型。',
 				stEngine: '引擎', stOnDevOk: ' · 端侧可用', stOnDevNo: ' · 端侧不可用',
+				stSegTranslated: '已译 {n} 处', stSegFailed: '失败 {n}', stSegQueued: '队列 {n}', stSegScanned: '扫描 {n}',
+				stSegSkippedLang: '非目标语言 {n}', stSegFallback: '回退在线 {n}', stSegCache: '译文缓存 {n}',
+				stSegChars: '本次会话 {u}/{l} 字符(在线计数)', stSegLast: '最近错误: {m}',
+				stSegRecovered: 'worker 自愈 {n} 次', stSegLoaded: '已加载 {n}', stSegWarming: '预热中 {n}',
+				stSegPeers: '另有 {n} 个标签页共享缓存',
 				stCounters: ' | 扫描 {s} / 入队 {q} / 已译 {t} / 跳过语言 {sl} / 失败 {f}',
 				stFallback: ' / 回退 {fb}', stCache: ' | 缓存 {c}', stPaused: ' | 已暂停',
 				stChars: ' | 本次会话 {u}/{l} 字符(在线计数)',
@@ -1283,11 +1509,21 @@ window.__ModuleLoader__.load({
 				hintScale: '建议:使用 fp32 干净图(插件默认已是)或点「重试」', hintNet: '建议:检查网络/代理,或点「重试」(宿主端会断点续传)',
 				hintLang: '建议:把「拉丁源语言」从 auto 改成具体语言(如 English)', hintQuota: '建议:切换到「本机离线」引擎(不限量)',
 				hintOom: '建议:关闭其他标签页后点「重试」(fp32 模型占用较大内存)', hintWorker: '建议:刷新页面(Ctrl+F5)让 worker 重建',
-				help: '【自动翻译 · 使用指南】\n\n· 自动工作:页面上的外语文本就地替换为目标语言\n· 悬停约 0.6 秒:在「译文 ↔ 原文」之间来回切换\n· Alt + 悬停:立即切换\n· Ctrl+Alt+T:呼出/关闭本面板(圆点找不到时用这个)\n· Ctrl+Alt+H:显示/隐藏左下角圆点\n· Ctrl+Alt+P:暂停 / 恢复翻译\n\n【引擎】\n· 本机离线(推荐):浏览器内 WASM 推理,零 token、不限量、文本不出本机\n· 在线免密钥:MyMemory,免 key 但有每日额度限制\n· 端侧:浏览器内置 Translator(需能连 Google 组件服务器)\n· 自定义端点:填你自己的翻译服务模板\n\n【本地模型】\n· en↔zh:opus-mt 专用小模型(约 425MB,用 fp32)\n· ja/ko 等:需 NLLB 600M(约 600MB,按需下载)\n· 模型缓存在浏览器,之后完全离线;出错点「保存诊断到本机」',
+				help: '【按需翻译 · 使用指南】\n\n· 不会自动翻译整页:只在主动操作时翻译\n· 悬停翻译:鼠标停在一块上约 0.6 秒 → 换成译文;再停一次 → 换回原文\n· Alt + 悬停:立即触发\n· 框选翻译:拖选文字松手 → 浮层显示译文(可改成「就地替换」)\n· Ctrl+Alt+T:呼出/关闭本面板(圆点找不到时用这个)\n· Ctrl+Alt+H:显示/隐藏左下角圆点\n· Ctrl+Alt+P:暂停 / 恢复\n\n【引擎(只决定由谁来翻)】\n· 本机离线(推荐):浏览器内 WASM 推理,零 token、不限量、文本不出本机\n· 在线免密钥:MyMemory,免 key 但有每日额度限制\n· 自定义端点:填你自己的翻译服务模板\n\n【本地模型】\n· en↔zh:opus-mt 专用小模型(约 425MB,用 fp32)\n· ja/ko 等:需 NLLB 600M(约 600MB,按需下载)\n· 模型缓存在浏览器,之后完全离线;出错点「保存诊断到本机」',
 			},
 			en: {
 				chipLabel: 'Tr', cacheLabel: 'host cache', clearHostCache: 'Clear host cache', cacheCleared: 'Host cache cleared',
 				metricsLabel: 'downloads',
+				modeLabel: 'Mode', onDemandNote: 'on-demand only, never auto-translates the page',
+				selectionMode: 'Selection', selPopup: 'Floating panel', selInline: 'Replace in place (click to restore)', selOff: 'Off',
+				selectionMinChars: 'Min selected chars', selTranslate: 'Translate', selClose: 'Close',
+				selWorking: 'Translating…', selSameLang: 'Already in the target language', selEmpty: 'The engine returned nothing',
+				selFailed: 'Translation failed: ', selDone: 'Replaced in place: ',
+				selInlineFallback: 'Selection spans several blocks — shown in the floating panel instead',
+				badgeError: ' · error',
+				groupCommon: 'Common', groupEngine: 'Engine & model', groupAdvanced: 'Advanced', groupDiag: 'Diagnostics & reset',
+				collapseAll: 'Collapse all', expandAll: 'Expand all', slim: 'Narrow',
+				triggerHint: 'Hover a block to translate it (delay above); drag-select text and release to translate it. Both fire only on your action.',
 				translateCode: 'Also translate code/thinking blocks (experimental)', avgLatency: 'avg {ms}ms/sentence',
 				multiTab: '{n} other tab(s) detected (translation cache shared, memory doubles)',
 				workerMode: 'Inference instance', wmAuto: 'Auto (prefer shared)', multiMode: 'Multilingual strategy', mmTwoHop: 'Two-hop (light/fast)',
@@ -1307,6 +1543,11 @@ window.__ModuleLoader__.load({
 				engineOnline: 'Online keyless', engineCustom: 'Custom endpoint', engineOff: 'Off',
 				footerHint: 'Hover a block for ~0.6s to translate it; hover the SAME block again to restore the original — repeats forever (default mode). Alt+hover triggers instantly. Hotkeys (rebindable): Ctrl+Alt+T panel · Ctrl+Alt+H chip · Ctrl+Alt+P pause. No LLM is ever called.',
 				stEngine: 'Engine', stOnDevOk: ' · built-in available', stOnDevNo: ' · built-in unavailable',
+				stSegTranslated: '{n} translated', stSegFailed: '{n} failed', stSegQueued: '{n} queued', stSegScanned: '{n} scanned',
+				stSegSkippedLang: '{n} not target language', stSegFallback: '{n} fell back online', stSegCache: '{n} cached',
+				stSegChars: 'session {u}/{l} chars (online only)', stSegLast: 'last error: {m}',
+				stSegRecovered: 'worker self-healed {n}x', stSegLoaded: 'loaded {n}', stSegWarming: 'warming {n}',
+				stSegPeers: '{n} other tab(s) sharing cache',
 				stCounters: ' | scanned {s} / queued {q} / translated {t} / skipped {sl} / failed {f}',
 				stFallback: ' / fallback {fb}', stCache: ' | cache {c}', stPaused: ' | paused',
 				stChars: ' | session {u}/{l} chars (online only)',
@@ -1320,7 +1561,7 @@ window.__ModuleLoader__.load({
 				hintScale: 'Tip: use the clean fp32 graphs (the default) or click Retry', hintNet: 'Tip: check network/proxy, or click Retry (the host cache resumes)',
 				hintLang: 'Tip: set "Latin source" to a concrete language (e.g. English) instead of auto', hintQuota: 'Tip: switch to the on-device engine (no quota)',
 				hintOom: 'Tip: close other tabs and click Retry (the fp32 model needs memory)', hintWorker: 'Tip: refresh the page (Ctrl+F5) to rebuild the worker',
-				help: '[Auto-translate · Guide]\n\n· Automatic: foreign text on screen is replaced in place\n· Hover ~0.6s: flip between translation and original\n· Alt + hover: flip immediately\n· Ctrl+Alt+T: open/close this panel (use it if the chip is lost)\n· Ctrl+Alt+H: show/hide the chip\n· Ctrl+Alt+P: pause/resume\n\n[Engines]\n· On-device (recommended): WASM in your browser, no tokens, no quota, text never leaves the machine\n· Online keyless: MyMemory, no key but a daily quota\n· Built-in: browser Translator API (needs Google component servers)\n· Custom endpoint: point at your own service\n\n[Local models]\n· en<->zh: opus-mt small models (~425MB, fp32)\n· ja/ko etc.: NLLB 600M (~600MB, on demand)\n· Cached in the browser; fully offline afterwards. On errors click "Save diagnostics".',
+				help: '[On-demand translation · Guide]\n\n· Never auto-translates the page: it only runs on your action\n· Hover: rest the pointer on a block ~0.6s -> it is swapped in place; hover again -> back to the original\n· Alt + hover: trigger immediately\n· Selection: drag-select text, release -> a floating panel shows the translation (switchable to in-place)\n· Ctrl+Alt+T: open/close this panel (use it if the chip is lost)\n· Ctrl+Alt+H: show/hide the chip\n· Ctrl+Alt+P: pause/resume\n\n[Engines (only decide who translates)]\n· Local (recommended): WASM in your browser, no tokens, no quota, text never leaves the machine\n· Online keyless: MyMemory, no key but a daily quota\n· Custom endpoint: point at your own service\n\n[Local models]\n· en<->zh: opus-mt small models (~425MB, fp32)\n· ja/ko etc.: NLLB 600M (~600MB, on demand)\n· Cached in the browser; fully offline afterwards. On errors click "Save diagnostics".',
 			},
 		};
 		function L() {
@@ -1365,46 +1606,66 @@ window.__ModuleLoader__.load({
 
 		// ===================== 控制面板（Shadow DOM，避免被自身翻译） =====================
 		var statusEl = null, cardEl = null, chipEl = null;
+		// 头部模式条：一眼看清「怎么触发 + 由谁翻 + 当前是否在翻」
+		function modeText() {
+			var backName = { local: t('engineLocal'), online: t('engineOnline'), custom: t('engineCustom'), ondevice: t('engineOnDevice') }[settings.hoverEngine] || t('engineLocal');
+			var selName = settings.selectionMode === 'inline' ? t('selInline') : (settings.selectionMode === 'off' ? t('selOff') : t('selPopup'));
+			var state = !settings.enabled ? t('stPaused') : (lastError ? t('badgeError') : '');
+			return t('engineHover') + ' · ' + backName + ' · ' + t('selectionMode') + ': ' + selName + state;
+		}
+		function updateModeLine() {
+			if (!cardEl) return;
+			var el = cardEl.querySelector('[data-el="modeText"]');
+			if (el) el.textContent = modeText();
+		}
 		function updateStatus() {
 			if (!statusEl) return;
 			var T = translatorCtor();
-			var modeName = { hover: t('engineHover'), auto: t('modeAuto'), ondevice: t('modeOnDevice'), online: t('modeOnline'), custom: t('modeCustom'), http: t('modeCustom'), off: t('modeOff') }[settings.engine] || settings.engine;
-			statusEl.textContent = t('stEngine') + ' ' + modeName + (settings.engine === 'auto' || settings.engine === 'ondevice' ? (T ? t('stOnDevOk') : t('stOnDevNo')) : '')
-				+ t('stCounters').replace('{s}', stats.scanned).replace('{q}', stats.queued).replace('{t}', stats.translated).replace('{sl}', stats.skippedLang).replace('{f}', stats.failed)
-				+ (stats.fellBack ? t('stFallback').replace('{fb}', stats.fellBack) : '')
-				+ t('stCache').replace('{c}', cache.size) + (settings.enabled ? '' : t('stPaused'));
+			updateModeLine();
+			// 状态行改为「分段 + ' · ' 分隔」：只显示此刻真正有意义的段，
+			// 旧版把十来项用 " | " 串成一整行糊在一起，读起来很累。
+			var segs = [];
+			function push(s) { if (s) segs.push(s); }
+			function clean(s) { return String(s == null ? '' : s).replace(/^\s*[|\u00b7]\s*/, '').trim(); }
+			push(t('stSegTranslated').replace('{n}', stats.translated));
+			if (stats.failed) push(t('stSegFailed').replace('{n}', stats.failed));
+			if (stats.queued) push(t('stSegQueued').replace('{n}', stats.queued));
+			if (stats.fellBack) push(t('stSegFallback').replace('{n}', stats.fellBack));
+			if (stats.skippedLang) push(t('stSegSkippedLang').replace('{n}', stats.skippedLang));
+			if (stats.scanned) push(t('stSegScanned').replace('{n}', stats.scanned));
+			push(t('stSegCache').replace('{n}', cache.size));
 			var lim = sessionLimit();
-			if (lim && statusEl) statusEl.textContent += ' | ' + t('stChars').replace('{u}', stats.chars).replace('{l}', lim);
+			if (lim) push(t('stSegChars').replace('{u}', stats.chars).replace('{l}', lim));
+			if (settings.hoverEngine === 'ondevice') push(T ? t('stOnDevOk') : t('stOnDevNo'));
+			if (!settings.enabled) push(clean(t('stPaused')));
 			if (lastError) {
-				statusEl.textContent += t('stLast') + String(lastError).slice(0, 80) + (String(lastError).length > 80 ? t('stTruncated') : '');
+				push(t('stSegLast').replace('{m}', String(lastError).slice(0, 80) + (String(lastError).length > 80 ? t('stTruncated') : '')));
 				var hint = hintFor(lastError);
-				if (hint) statusEl.textContent += ' | ' + hint;
+				if (hint) push(hint);
 			}
-			if (workerRecoveries && statusEl) statusEl.textContent += t('stRecovered').replace('{n}', workerRecoveries);
-			if (localLatencyCount > 0 && statusEl) statusEl.textContent += ' | ' + t('avgLatency').replace('{ms}', Math.round(localLatencySum / localLatencyCount));
+			if (workerRecoveries) push(t('stSegRecovered').replace('{n}', workerRecoveries));
+			if (localLatencyCount > 0) push(t('avgLatency').replace('{ms}', Math.round(localLatencySum / localLatencyCount)));
 			var paired = Object.keys(loadedPairs);
-			if (paired.length && statusEl) statusEl.textContent += t('stLoaded') + paired.join(',');
-			if (warmingPair && statusEl) statusEl.textContent += t('stWarming') + warmingPair;
-			if (hostCacheInfo && statusEl) statusEl.textContent += ' | ' + hostCacheInfo;
-			if (metricsInfo && statusEl) statusEl.textContent += ' | ' + metricsInfo;
-			if (bcPeers > 0 && statusEl) statusEl.textContent += ' | ' + t('multiTab').replace('{n}', bcPeers);
+			if (paired.length) push(t('stSegLoaded').replace('{n}', paired.join(',')));
+			if (warmingPair) push(t('stSegWarming').replace('{n}', warmingPair));
+			if (hostCacheInfo) push(clean(hostCacheInfo));
+			if (metricsInfo) push(clean(metricsInfo));
+			if (bcPeers > 0) push(t('stSegPeers').replace('{n}', bcPeers));
+			if (stats.failed > 0 && !stats.translated && settings.hoverEngine === 'ondevice') push(clean(t('stOnDevFailed')));
+			if (onDeviceDisabled) push(clean(t('stOnDevOff')));
+			if (localWarm) push(clean(t('stWarm')));
+			else if (localProgress) {
+				var pct = localProgress.progress ? Math.max(0, Math.min(100, Math.round(localProgress.progress))) : 0;
+				var mb = localProgress.total ? ' (' + (localProgress.loaded / 1048576).toFixed(1) + '/' + (localProgress.total / 1048576).toFixed(1) + 'MB)' : '';
+				push(clean(t('stDownloading')) + pct + '%' + mb + (localProgress.file ? ' · ' + String(localProgress.file).slice(-26) : ''));
+			} else if (!localBooted) push(clean(t('stWorkerDown')));
+			if (!localWarm && !settings.localWarmOnce) push(clean(t('stFirstRun')));
+			statusEl.textContent = segs.join(' · ');
 			var errBoxEl = cardEl && cardEl.querySelector('[data-el="errbox"]');
 			if (errBoxEl) {
 				if (lastError) { errBoxEl.value = String(lastError); errBoxEl.style.display = 'block'; }
 				else { errBoxEl.style.display = 'none'; }
 			}
-			if (stats.failed > 0 && !stats.translated && settings.engine === 'ondevice') statusEl.textContent += t('stOnDevFailed');
-			if (onDeviceDisabled) statusEl.textContent += t('stOnDevOff');
-			if (localWarm) {
-				statusEl.textContent += t('stWarm');
-			} else if (localProgress) {
-				var pct = localProgress.progress ? Math.max(0, Math.min(100, Math.round(localProgress.progress))) : 0;
-				var mb = localProgress.total ? ' (' + (localProgress.loaded / 1048576).toFixed(1) + '/' + (localProgress.total / 1048576).toFixed(1) + 'MB)' : '';
-				statusEl.textContent += t('stDownloading') + pct + '%' + mb + (localProgress.file ? ' · ' + String(localProgress.file).slice(-26) : '');
-			} else if (!localBooted) {
-				statusEl.textContent += t('stWorkerDown');
-			}
-			if (!localWarm && !settings.localWarmOnce && settings.engine !== 'off') statusEl.textContent += t('stFirstRun');
 			var pbarEl = cardEl && cardEl.querySelector('[data-el="pbar"]');
 			var pfillEl = cardEl && cardEl.querySelector('[data-el="pfill"]');
 			if (pbarEl && pfillEl) {
@@ -1465,41 +1726,75 @@ window.__ModuleLoader__.load({
 				+ '::-webkit-scrollbar-corner{background:transparent}'
 				+ '.card{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.22) transparent;scrollbar-gutter:stable}'
 				+ '.help{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.22) transparent}'
-				+ '.errbox{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.22) transparent}';
+				+ '.errbox{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.22) transparent}'
+				+ '.hdr{position:sticky;top:0;z-index:3;background:rgba(20,22,28,.97);margin:-2px 0 6px;padding:2px 0}'
+				+ '.grow{flex:1}'
+				+ 'button.mini{padding:1px 6px;font-size:11px;opacity:.72}'
+				+ 'button.mini:hover{opacity:1}'
+				+ '.modeline{display:flex;gap:6px;align-items:center;background:#111318;border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:5px 7px;font-size:11.5px;margin:0 0 6px}'
+				+ 'details.grp{border:1px solid rgba(255,255,255,.12);border-radius:8px;margin:6px 0;padding:0 8px;background:rgba(255,255,255,.02)}'
+				+ 'details.grp>summary{cursor:pointer;list-style:none;padding:7px 0;font-weight:600;font-size:11.5px;opacity:.92}'
+				+ 'details.grp>summary::-webkit-details-marker{display:none}'
+				+ 'details.grp>summary::before{content:"\\25B8 ";opacity:.55;font-size:10px}'
+				+ 'details.grp[open]>summary::before{content:"\\25BE "}'
+				+ 'details.grp[open]{padding-bottom:6px}'
+				+ 'details.grp>summary:hover{opacity:1}'
+				+ '.card.slim{width:238px;padding:10px}'
+				+ '.card.slim .row{margin:4px 0}'
+				+ '.card.slim details.grp{padding:0 6px}'
+				+ '.selpop{position:fixed;z-index:2147483100;max-width:330px;max-height:250px;overflow:auto;pointer-events:auto;display:none;background:rgba(20,22,28,.97);color:#e8eaf0;border:1px solid rgba(255,255,255,.2);border-radius:10px;padding:8px 10px;box-shadow:0 8px 24px rgba(0,0,0,.42);font-size:12px;line-height:1.55}'
+				+ '.selpop.on{display:block}'
+				+ '.selpop .src{opacity:.55;font-size:11px;max-height:64px;overflow:auto;margin:0 0 5px;white-space:pre-wrap}'
+				+ '.selpop .dst{white-space:pre-wrap;user-select:text}'
+				+ '.selpop .bar{display:flex;gap:6px;justify-content:flex-end;margin-top:7px}';
 			sr.appendChild(style);
+			hostSr = sr;
 			cardEl = document.createElement('div');
 			cardEl.className = 'card';
-			cardEl.innerHTML = '<div class="row"><strong data-i18n="title"></strong><button data-act="close" data-i18n="close"></button></div>'
-				+ '<div class="row"><label data-i18n="lang"></label><select data-set="lang"><option value="auto" data-i18n="langAuto"></option><option value="zh">中文</option><option value="en">English</option></select></div>'
+						cardEl.innerHTML = '<div class="row hdr"><strong data-i18n="title"></strong><span class="grow"></span><button class="mini" data-act="expandAll" data-i18n="expandAll"></button><button class="mini" data-act="collapseAll" data-i18n="collapseAll"></button><button class="mini" data-act="slim" data-i18n="slim"></button><button data-act="close" data-i18n="close"></button></div>'
+				+ '<div class="modeline"><span data-el="modeText"></span></div>'
+				+ '<div class="hint" data-i18n="onDemandNote"></div>'
+				+ '<details class="grp" data-grp="common" open><summary data-i18n="groupCommon"></summary>'
 				+ '<div class="row"><label data-i18n="enabled"></label><input type="checkbox" data-set="enabled"></div>'
+				+ '<div class="row"><label data-i18n="engine"></label><select data-set="hoverEngine"><option value="local" data-i18n="engineLocal"></option><option value="online" data-i18n="engineOnline"></option><option value="custom" data-i18n="engineCustom"></option></select></div>'
 				+ '<div class="row"><label data-i18n="target"></label><select data-set="target"></select></div>'
 				+ '<div class="row"><label data-i18n="hoverDelay"></label><input type="number" min="0" max="5000" step="100" data-set="hoverDelayMs" style="width:80px"></div>'
-				+ '<div class="row"><label data-i18n="engine"></label><select data-set="engine"><option value="hover" data-i18n="engineHover"></option><option value="auto" data-i18n="engineAuto"></option><option value="local" data-i18n="engineLocal"></option><option value="ondevice" data-i18n="engineOnDevice"></option><option value="online" data-i18n="engineOnline"></option><option value="custom" data-i18n="engineCustom"></option><option value="off" data-i18n="engineOff"></option></select></div>'
+				+ '<div class="row"><label data-i18n="selectionMode"></label><select data-set="selectionMode"><option value="popup" data-i18n="selPopup"></option><option value="inline" data-i18n="selInline"></option><option value="off" data-i18n="selOff"></option></select></div>'
+				+ '<div class="row"><label data-i18n="selectionMinChars"></label><input type="number" min="1" max="500" step="1" data-set="selectionMinChars" style="width:70px"></div>'
+				+ '<div class="row"><label data-i18n="lang"></label><select data-set="lang"><option value="auto" data-i18n="langAuto"></option><option value="zh">中文</option><option value="en">English</option></select></div>'
+				+ '<div class="hint" data-i18n="triggerHint"></div>'
+				+ '</details>'
+				+ '<details class="grp" data-grp="engine"><summary data-i18n="groupEngine"></summary>'
+				+ '<div class="row"><label data-i18n="workerMode"></label><select data-set="workerMode"><option value="auto" data-i18n="wmAuto"></option><option value="shared">SharedWorker</option><option value="dedicated">Worker</option></select></div>'
+				+ '<div class="row"><label data-i18n="multiMode"></label><select data-set="multiMode"><option value="two-hop" data-i18n="mmTwoHop"></option><option value="nllb">NLLB 600M</option></select></div>'
+				+ '<div class="row"><label data-i18n="localModel"></label><button data-act="warmlocal" data-i18n="warmLocal"></button><button data-act="uselocal" data-i18n="useLocal"></button></div>'
+				+ '<div class="row"><label data-i18n="initOnDevice"></label><button data-act="warm" data-i18n="warmBtn"></button></div>'
+				+ '<div class="row"><label data-i18n="ondevUnavailable"></label><button data-act="useonline" data-i18n="useOnline"></button></div>'
+				+ '<div class="row"><label data-i18n="singlePair"></label><select data-el="pairSel"><option value="en>zh">en → zh</option><option value="zh>en">zh → en</option><option value="ja>zh">ja → zh (NLLB)</option><option value="ko>zh">ko → zh (NLLB)</option></select><button data-act="warmPair" data-i18n="warmPair"></button></div>'
+				+ '<div class="row"><label data-i18n="abort"></label><button data-act="cancelWarm" data-i18n="cancelWarm"></button></div>'
 				+ '<div class="row"><label data-i18n="onlineOrder"></label><select data-set="onlineOrder"><option value="google">Google</option><option value="mymemory">MyMemory</option></select></div>'
 				+ '<div class="row"><label data-i18n="customTemplate"></label><input type="text" data-set="endpoint" placeholder="…?q={text}&target={target}" style="max-width:150px"></div>'
 				+ '<div class="row"><label data-i18n="latinSource"></label><select data-set="latinSource"></select></div>'
-				+ '<div class="row"><label data-i18n="initOnDevice"></label><button data-act="warm" data-i18n="warmBtn"></button></div>'
+				+ '</details>'
+				+ '<details class="grp" data-grp="advanced"><summary data-i18n="groupAdvanced"></summary>'
 				+ '<div class="row"><label data-i18n="summonPanel"></label><button data-act="rebindSummon"><span data-el="hkSummon"></span> <span data-i18n="rebind"></span></button><button data-act="summon" data-i18n="summon"></button></div>'
 				+ '<div class="row"><label data-i18n="toggleChip"></label><button data-act="rebindHide"><span data-el="hkHide"></span> <span data-i18n="rebind"></span></button></div>'
 				+ '<div class="row"><label data-i18n="pauseRow"></label><button data-act="rebindPause"><span data-el="hkPause"></span> <span data-i18n="rebind"></span></button></div>'
-				+ '<div class="row"><label data-i18n="selfCheck"></label><button data-act="test" data-i18n="test"></button><button data-act="diag" data-i18n="diag"></button></div>'
-				+ '<div class="row"><label data-i18n="ondevUnavailable"></label><button data-act="useonline" data-i18n="useOnline"></button></div>'
-				+ '<div class="row"><label data-i18n="localModel"></label><button data-act="warmlocal" data-i18n="warmLocal"></button><button data-act="uselocal" data-i18n="useLocal"></button></div>'
-				+ '<div class="row"><label data-i18n="workerMode"></label><select data-set="workerMode"><option value="auto" data-i18n="wmAuto"></option><option value="shared">SharedWorker</option><option value="dedicated">Worker</option></select></div>'
-				+ '<div class="row"><label data-i18n="multiMode"></label><select data-set="multiMode"><option value="two-hop" data-i18n="mmTwoHop"></option><option value="nllb">NLLB 600M</option></select></div>'
-				+ '<div class="row"><label data-i18n="singlePair"></label><select data-el="pairSel"><option value="en>zh">en → zh</option><option value="zh>en">zh → en</option><option value="ja>zh">ja → zh (NLLB)</option><option value="ko>zh">ko → zh (NLLB)</option></select><button data-act="warmPair" data-i18n="warmPair"></button></div>'
-				+ '<div class="row"><label data-i18n="abort"></label><button data-act="cancelWarm" data-i18n="cancelWarm"></button></div>'
 				+ '<div class="row"><label data-i18n="sessionLimit"></label><input type="number" min="0" step="1000" data-set="maxChars" style="width:96px"><button data-act="resetChars" data-i18n="resetChars"></button></div>'
 				+ '<div class="row"><label data-i18n="compactChip"></label><input type="checkbox" data-set="chipCompact"></div>'
 				+ '<div class="row"><label data-i18n="translateCode"></label><input type="checkbox" data-set="translateCode"></div>'
-				+ '<div class="row"><button data-act="clearHostCache" data-i18n="clearHostCache"></button></div>'
+				+ '</details>'
+				+ '<details class="grp" data-grp="diag"><summary data-i18n="groupDiag"></summary>'
+				+ '<div class="row"><label data-i18n="selfCheck"></label><button data-act="test" data-i18n="test"></button><button data-act="diag" data-i18n="diag"></button></div>'
 				+ '<div class="row"><label data-i18n="metricsLabel"></label><span data-el="metricsBox" style="color:#9aa4b2;font-size:11px"></span></div>'
-				+ '<div class="row"><button data-act="resetpos" data-i18n="resetPos"></button><button data-act="hide" data-i18n="hideChip"></button><button data-act="clearcache" data-i18n="clearCache"></button></div>'
 				+ '<div class="row"><button data-act="rescan" data-i18n="rescan"></button><button data-act="restore" data-i18n="restore"></button></div>'
+				+ '<div class="row"><button data-act="clearHostCache" data-i18n="clearHostCache"></button></div>'
+				+ '<div class="row"><button data-act="savediag" data-i18n="saveDiag"></button><button data-act="copydiag" data-i18n="copyDiag"></button></div>'
+				+ '<div class="row"><button data-act="resetpos" data-i18n="resetPos"></button><button data-act="hide" data-i18n="hideChip"></button><button data-act="clearcache" data-i18n="clearCache"></button></div>'
+				+ '</details>'
 				+ '<div class="hint" data-el="status"></div>'
 				+ '<div class="pbar" data-el="pbar"><div class="pfill" data-el="pfill"></div></div>'
 				+ '<textarea class="errbox" data-el="errbox" readonly rows="4" spellcheck="false"></textarea>'
-				+ '<div class="row"><button data-act="savediag" data-i18n="saveDiag"></button><button data-act="copydiag" data-i18n="copyDiag"></button></div>'
 				+ '<div class="row"><button data-act="retry" data-i18n="retry"></button><button data-act="toggleAll" data-i18n="toggleAll"></button><button data-act="help" data-i18n="helpBtn"></button></div>'
 				+ '<div class="help" data-el="help"></div>'
 				+ '<div class="hint" data-i18n="footerHint"></div>';
@@ -1552,8 +1847,21 @@ window.__ModuleLoader__.load({
 			chip.addEventListener('pointerup', endDrag);
 			chip.addEventListener('pointercancel', endDrag);
 			cardEl.addEventListener('click', function (e) {
-				var act = e.target && e.target.getAttribute && e.target.getAttribute('data-act');
+				// 用 closest：按钮里的 <span>（如改键按钮上的组合键）被点到时也能正确识别
+				var actEl = e.target && e.target.closest ? e.target.closest('[data-act]') : null;
+				var act = actEl && actEl.getAttribute('data-act');
 				if (act === 'close') cardEl.classList.remove('open');
+				else if (act === 'expandAll' || act === 'collapseAll') {
+					var open = act === 'expandAll';
+					var grps = cardEl.querySelectorAll('details.grp');
+					for (var gi = 0; gi < grps.length; gi++) grps[gi].open = open;
+				}
+				else if (act === 'slim') {
+					settings.slimPanel = !settings.slimPanel;
+					saveSettings();
+					applySettingsToUI();
+					if (statusEl) statusEl.textContent = settings.slimPanel ? '面板已改为窄模式（再点一次恢复）' : '面板已恢复常规宽度';
+				}
 				else if (act === 'rescan') { stats.chars = 0; lastError = ''; scanRoot(document.body, 0); updateStatus(); }
 				else if (act === 'restore') restoreAll();
 				else if (act === 'clearcache') { cache.clear(); cacheDirty = true; cacheFlush(); stats.chars = 0; updateStatus(); }
@@ -1648,6 +1956,7 @@ window.__ModuleLoader__.load({
 				if (!key) return;
 				var val = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
 				if (key === 'hoverDelayMs' || key === 'cacheLimit') val = Number(val) || 0;
+				if (key === 'selectionMinChars') val = Math.max(1, Number(val) || 8);
 				settings[key] = val;
 				saveSettings();
 				if (key === 'lang') applyI18n();
@@ -1656,6 +1965,12 @@ window.__ModuleLoader__.load({
 				if (key === 'workerMode') { resetWorker('mode-change'); }
 				if (key === 'multiMode' && localWorker && localWorker.post) { localWorker.post({ type: 'config', multiMode: settings.multiMode }); }
 				if (key === 'engine' || key === 'target' || key === 'latinSource') { resetTranslationState(true); scanRoot(document.body, 0); }
+				if (key === 'hoverEngine') {
+					// 换引擎：把上一个引擎留下的译文先还原，否则会变成没有记录可查的孤儿译文
+					resetTranslationState(true);
+					if (val === 'local') warmLocal();
+				}
+				updateStatus();
 			});
 			applyI18n();
 			applySettingsToUI();
@@ -1675,15 +1990,16 @@ window.__ModuleLoader__.load({
 				var above = rect.top > 380;
 				cardEl.style.bottom = above ? 'calc(100% + 8px)' : 'auto';
 				cardEl.style.top = above ? 'auto' : 'calc(100% + 8px)';
-				// 距离右边缘过近（放不下 290px 卡片）时改为向左展开，避免出屏
+				// 距离右边缘过近（放不下卡片）时改为向左展开，避免出屏
 				var spaceRight = window.innerWidth - rect.right;
-				var flipLeft = spaceRight < 306;
+				var flipLeft = spaceRight < (settings.slimPanel ? 254 : 306);
 				cardEl.style.left = flipLeft ? 'auto' : '0';
 				cardEl.style.right = flipLeft ? '0' : 'auto';
 			}
 		}
 		function applySettingsToUI() {
 			if (!cardEl) return;
+			cardEl.classList.toggle('slim', !!settings.slimPanel);
 			cardEl.querySelectorAll('[data-set]').forEach(function (el) {
 				var key = el.getAttribute('data-set');
 				if (!(key in settings)) return;
@@ -1805,7 +2121,19 @@ window.__ModuleLoader__.load({
 			window.addEventListener('resize', function () { placeChip(); });
 			document.addEventListener('mouseover', onOver, true);
 			document.addEventListener('mouseout', onOut, true);
+			// 框选翻译：只在用户真的拖选/点击时工作（从不自动翻页）
+			document.addEventListener('mouseup', onDocMouseUp, true);
+			document.addEventListener('mousedown', onDocMouseDown, true);
 			document.addEventListener('keydown', function (e) {
+				if (e.key === 'Escape') {
+					// 先收掉框选浮层/就地替换，再交给快捷键逻辑
+					if (selPopEl && selPopEl.classList.contains('on')) { hideSelPop(); return; }
+					if (inlineSpans.length) {
+						var n = restoreInlineSelections();
+						if (statusEl) statusEl.textContent = t('selDone') + n;
+						return;
+					}
+				}
 				var combo = comboOf(e);
 				if (!combo) return;
 				if (rebinding) {
@@ -1832,7 +2160,7 @@ window.__ModuleLoader__.load({
 			refreshHostCacheInfo();
 			refreshMetricsInfo();
 			// 启动自动预热：模型已在浏览器缓存里，只需重建会话（几百毫秒~数秒）
-			if (settings.enabled && settings.engine !== 'off' && (settings.localWarmOnce || settings.engine === 'local')) {
+			if (settings.enabled && settings.hoverEngine === 'local' && (settings.localWarmOnce || settings.engine === 'local')) {
 				setTimeout(function () { try { warmLocal(); } catch (e) { } }, 1500);
 			}
 			window.__dshAutoTranslate = {
@@ -1866,6 +2194,9 @@ window.__ModuleLoader__.load({
 			},
 			limits: { QUEUE_MAX: QUEUE_MAX, RECORDS_MAX: RECORDS_MAX },
 			revertTranslatedNodes: revertTranslatedNodes, pruneDeadRecords: pruneDeadRecords,
+			modeText: modeText, selectionBlocked: selectionBlocked,
+			restoreInlineSelections: restoreInlineSelections,
+			inlineCount: function () { return inlineSpans.length; },
 		};
 		return module.exports;
 	}

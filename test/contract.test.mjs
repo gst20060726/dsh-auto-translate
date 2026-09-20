@@ -318,3 +318,70 @@ test('vendor 资源齐全（JS 与 loader 必须随包提供）', () => {
   }
   assert.doesNotMatch(read('vendor/transformers.esm.v2.js'), /from"\/npm\//, '不得残留根相对 CDN 引入')
 })
+
+test('0.4.0：彻底取消自动全页翻译，engine 只剩「触发方式」，后端由 hoverEngine 决定', () => {
+  const src = read('client.js')
+  // 1) 面板里不得再有会触发整页翻译的 engine 选择器
+  assert.doesNotMatch(src, /data-set="engine"/, '面板不得再暴露会整页自动翻译的 engine 选择器')
+  assert.match(src, /data-set="hoverEngine"/, '面板必须提供「由谁翻」的后端选择器')
+  assert.doesNotMatch(src, /option value="auto" data-i18n="engineAuto"/, '不得保留「自动」选项')
+  // 2) translateText 的按需分支必须按 hoverEngine 选后端（旧实现固定落回本机离线）
+  const branch = src.match(/\/\/ 悬停\/框选模式：([\s\S]{0,400}?)\n\t\t\}/)
+  assert.ok(branch, '应能找到 translateText 的按需分支')
+  assert.match(branch[1], /settings\.hoverEngine/, '按需分支必须读取 hoverEngine')
+  assert.match(branch[1], /onlineTranslate/, 'hoverEngine=online 必须真的走在线引擎')
+  assert.match(branch[1], /httpTranslate/, 'hoverEngine=custom 必须真的走自定义端点')
+  // 3) 迁移：老配置的「用哪个引擎」必须搬到 hoverEngine，engine 归位 hover
+  const mig = src.match(/settings\.version < 5\)([\s\S]{0,700}?)\n\t\t\}/)
+  assert.ok(mig, '应有 v5 迁移块')
+  assert.match(mig[1], /settings\.hoverEngine = 'online'/, 'v5 迁移必须搬运在线偏好')
+  assert.match(mig[1], /settings\.engine = 'hover'/, 'v5 迁移必须把 engine 归位为按需触发')
+  assert.match(mig[1], /settings\.enabled = false/, '旧的「关闭」必须迁移成「未启用」，不得悄悄打开')
+})
+
+test('0.4.0：框选翻译只在用户主动操作时触发，且守住输入框/代码块/面板自身', () => {
+  const src = read('client.js')
+  // 1) 只在 mouseup 后读取选区（没有任何 selectionchange 自动翻译的路径）
+  assert.doesNotMatch(src, /selectionchange/, '不得用 selectionchange 自动触发翻译')
+  assert.match(src, /addEventListener\('mouseup', onDocMouseUp, true\)/, '必须监听 mouseup 读取用户选区')
+  assert.match(src, /function selectionItem\(tgt\)/, '必须有 selectionItem 解析选区（并校验松手位置属于该选区）')
+  assert.match(src, /selectionBlocked\(/, '必须有选区跳过规则')
+  // 2) 跳过规则必须复用统一判定 + SKIP_TAGS（输入框、代码块、面板自身）
+  const blk = src.match(/function selectionBlocked\(el\) \{([\s\S]*?)\n\t\t\}/)
+  assert.ok(blk, '应能找到 selectionBlocked')
+  assert.match(blk[1], /SKIP_TAGS\[cur\.tagName\]/, '必须按标签跳过输入框/代码块')
+  assert.match(blk[1], /isSkipped\(el\)/, '必须复用 isSkipped（面板自身/代码编辑器/translate=no）')
+  // 3) 两种呈现方式都要有实现
+  assert.match(src, /function showSelPop\(/, '必须有浮层呈现')
+  assert.match(src, /function inlineReplaceSelection\(/, '必须有就地替换呈现')
+  assert.match(src, /data-dsh-at-sel/, '就地替换的片段必须打标记，便于还原')
+  // 4) 就地替换必须能一键还原，且随「还原原文」一起回滚
+  assert.match(src, /function restoreInlineSelections\(/, '必须有就地替换的还原')
+  const rev = src.match(/function revertTranslatedNodes\(\) \{([\s\S]{0,220}?)\n\t\t\tpruneDeadRecords/)
+  assert.ok(rev, '应能找到 revertTranslatedNodes 开头')
+  assert.match(rev[1], /restoreInlineSelections\(\)/, '「还原原文」必须先收回就地替换')
+  // 5) 三种模式（浮层/就地/关闭）都必须在面板里可选
+  for (const v of ['popup', 'inline', 'off']) assert.match(src, new RegExp('data-set="selectionMode"[\\s\\S]{0,200}?value="' + v + '"'), 'selectionMode 缺选项 ' + v)
+})
+
+test('0.4.0：面板分组折叠 + 状态行分段（解决「太长/难读」）', () => {
+  const src = read('client.js')
+  // 四个分组，且默认只展开「常用」
+  assert.match(src, /data-grp="common" open/, '「常用」分组应默认展开')
+  for (const g of ['engine', 'advanced', 'diag']) assert.match(src, new RegExp('data-grp="' + g + '"'), '缺少分组 ' + g)
+  assert.match(src, /data-act="expandAll"/, '应有「展开全部」')
+  assert.match(src, /data-act="collapseAll"/, '应有「折叠全部」')
+  assert.match(src, /data-act="slim"/, '应有「窄面板」开关（更不挡内容）')
+  // 状态行：分段拼接 + 去掉前缀，不得再拼成一整行 " | "
+  const st = src.match(/statusEl\.textContent = segs\.join\(' · '\)/)
+  assert.ok(st, '状态行必须分段拼接')
+  assert.match(src, /function modeText\(\)/, '必须有头部模式条')
+  assert.match(src, /data-el="modeText"/, '面板必须有模式条元素')
+})
+
+test('0.4.0：状态行不再残留自动翻译时代的措辞', () => {
+  const src = read('client.js')
+  assert.doesNotMatch(src, /自动翻译 · 使用指南/, '帮助文案不得再宣称「自动翻译」')
+  assert.doesNotMatch(src, /自动工作:页面上的外语文本就地替换/, '帮助文案不得再说「自动工作」')
+  assert.match(src, /不会自动翻译整页/, '帮助文案必须明确「不会自动翻译整页」')
+})

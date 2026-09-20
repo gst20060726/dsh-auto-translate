@@ -1,6 +1,6 @@
 # dsh-auto-translate
 
-> Zero-token auto-translation for the DeepSeek Harness web GUI. Foreign text is translated **in place**; hover ~0.6s to flip between the translation and the original.
+> Zero-token **on-demand** translation for the DeepSeek Harness web GUI. It **never auto-translates the page**: hover a block ~0.6s to translate it in place (hover again to restore), or drag-select text and release for a popup / in-place translation.
 
 MIT · DeepSeek Harness `0.1.5-rc.1`+ · Chrome/Edge 116+
 
@@ -39,22 +39,28 @@ The package ships **without** the 74MB ORT wasm (fetched from CDN on first use);
 
 | Action | Effect |
 | --- | --- |
-| automatic | foreign text on screen is replaced with the target language |
-| hover ~0.6s | that block flips back to the original; move away and hover again to flip back |
-| `Alt` + hover | flip immediately |
+| hover ~0.6s | that block is swapped in place; move away and hover again to flip back to the original |
+| drag-select and release | translate the selection: floating panel by default (copy button), or switch the panel to **in-place** (click the page / press Esc to restore) |
+| `Alt` + hover | translate/flip immediately |
 | `Ctrl+Alt+T` | open/close the panel (use this if you lost the chip) |
 | `Ctrl+Alt+H` | show/hide the chip |
 | `Ctrl+Alt+P` | pause/resume translation |
+
+> **Nothing is auto-translated.** That is deliberate as of 0.4.0: only the actions above trigger
+> translation, so the plugin never rewrites an interface you are reading or typing into.
+> The panel is grouped into *Common / Engine & models / Advanced / Diagnostics* (collapsed by default)
+> and has a narrow mode.
 
 All three hotkeys are rebindable inside the panel.
 
 ## Engines
 
+> Since 0.4.0 the engine only decides **who translates** — never *when*. Triggering is always on demand.
+
 | Engine | Tokens | Network | Notes |
 | --- | --- | --- | --- |
-| **On-device WASM (recommended)** | none | first model download only | ~425MB for en<->zh |
+| **Local WASM (recommended, default)** | none | first model download only | ~425MB for en<->zh |
 | Online keyless | none | every string goes to MyMemory | anonymous daily quota |
-| Browser built-in | none | needs Google component servers | usually unreachable on some networks |
 | Custom endpoint | none | your own service | e.g. self-hosted LibreTranslate |
 
 ## Local models

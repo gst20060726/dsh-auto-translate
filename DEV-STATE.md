@@ -37,11 +37,12 @@
 
 ## 当前版本
 
-- 版本 0.2.2 ｜ 本地 git 仓库（`git log --oneline -1` 看最新提交）
+- 版本 **0.4.0**（仓库 HEAD 见 `git log --oneline -1`）｜ 上一版代码是 0.3.0（指标入口 `metrics.mjs`）
+- npm 上的 latest 是 **0.2.2**（0.3.0 / 0.4.0 都**尚未发布**）
 - 已安装为 profile link：`dsh plugin --profile web add link:C:/Users/20549/.dsh/plugins/dsh-auto-translate`
 - 已上线镜像：**https://gitee.com/nysjn/dsh-auto-translate.git**（远端名 `gitee`，`main` 跟踪 `gitee/main`）
-- 已发布 npm：**dsh-auto-translate@0.2.1**（latest）｜ 0.2.0 也在线上 ｜ **0.2.2 尚未发布**
-  - 别人安装：`dsh plugin --profile web add dsh-auto-translate`（拿到的是 latest = 0.2.1，**还没有悬停翻译模式**）
+- 已发布 npm：**dsh-auto-translate@0.2.2**（latest）｜ 0.2.0 / 0.2.1 也在线上
+  - 别人安装：`dsh plugin --profile web add dsh-auto-translate`（拿到的是 latest = 0.2.2，**没有按需翻译与框选翻译**）
   - ✅ **更正**：0.2.1 当时并非「发布失败」——`npm publish` 打印成功行后，registry 的 packument 与 tarball
     **同步有延迟（实测约 3~5 分钟）**，我当时立刻查询才看到 404。现在 0.2.1 的 tarball 已可正常下载。
     教训：**判定发布成功要轮询几分钟**，别用发布后立刻的第一次查询下结论；也不要只看 publish 的输出。
@@ -50,6 +51,32 @@
   - 每次发布的令牌流程见下面「发布到 npm」一节（临时 bypass 令牌 → 发 → 立即删除 → 回 npm 吊销）
 - 生效方式：改完 `index.js` 或 `client.js` 必须**重启 dsh web**；`vendor/` 下的文件是运行时按需加载，改动无需重启
   - 判断是否已重启：`(Get-NetTCPConnection -LocalPort 3080 -State Listen).OwningProcess` 取 PID，比该进程 `StartTime` 与 `client.js` 的 `LastWriteTime`
+
+## 0.4.0：按需翻译（2026-09-20）— 破坏性变更，务必知道
+
+用户要求：**取消自动全页翻译**，只在「鼠标悬停」或「框选多段」时翻译；同时优化面板视觉与体验，
+且**不污染正常使用体验**。落地方式：
+
+- `settings.engine` 恒为 `'hover'`，只表示「触发方式 = 按需」；面板里**不再有** engine 下拉
+  （`data-set="engine"` 已删除，有契约测试守着）。
+- **「由谁翻」搬到新字段 `settings.hoverEngine`**：`local`（默认）/ `online` / `custom`，
+  由面板「常用」组里的下拉决定；`translateText()` 尾部的按需分支按它选后端。
+  ⚠️ 改这个分支时注意：旧实现是「固定落回 local」，会让「切到在线引擎」在按需模式下失效。
+- **v5 迁移**：`local`/`auto` → `hoverEngine=local`；`online` → `online`；`custom`/`http` → `custom`；
+  `engine='off'` → `enabled=false`（**旧的「关闭」绝不能被悄悄打开**）。
+- **框选翻译**（新）：`selectionMode` = `popup`（默认，浮层）/ `inline`（就地替换，点击页面或 Esc 还原）/ `off`；
+  `selectionMinChars`（默认 8）、`selMaxChars`（默认 1200）。
+  - 触发路径只有 `mouseup`（capture）→ `selectionItem()`；**刻意不用 `selectionchange`**，避免任何自动行为。
+  - 跳过规则复用 `isSkipped()` + `SKIP_TAGS`：输入框、代码块（除开启 `translateCode`）、
+    contenteditable、CodeMirror/Monaco、插件面板自身一律不翻。
+  - `inline` 只处理「同一文本节点内」的选区（`range.deleteContents()+insertNode`），跨段落自动退回浮层；
+    替换出的 `<span data-dsh-at-sel data-dsh-at-skip>` 会进 `inlineSpans`，随 `revertTranslatedNodes()` 一起回滚。
+- **面板重排**：四个 `<details class="grp">`（常用 open / 引擎与模型 / 高级 / 诊断与重置）+ 顶部
+  「展开全部 / 折叠全部 / 窄面板」；用原生 `<details>` 因此**不需要任何 JS 状态**。
+- **头部模式条** `[data-el="modeText"]`：显示「按需 · 后端 · 框选方式 · 暂停/有错」；状态行改为分段
+  `' · '` 拼接（只显示非零段），不再是一整行 ` | `。
+- 测试：`node --test "test/*.test.mjs"` → 38 项；旧 E2E（自动翻译/流式稳定期）已按新语义重写，
+  新增框选/迁移/面板结构/文案契约测试。⚠️ **`node --test test/` 会报 MODULE_NOT_FOUND，必须用 glob**。
 
 ## 关键路径
 

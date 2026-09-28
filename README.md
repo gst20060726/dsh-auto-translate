@@ -36,7 +36,7 @@
     dsh plugin --profile web add link:/absolute/path/to/dsh-auto-translate
 
     # 方式 C：直接从 GitHub
-    dsh plugin --profile web add github:<your-name>/dsh-auto-translate
+    dsh plugin --profile web add github:gst20060726/dsh-auto-translate
 
 安装后**重启 dsh web**，再刷新浏览器。左下角出现半透明「译 xx」小圆点即成功。
 

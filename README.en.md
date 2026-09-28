@@ -20,7 +20,7 @@ MIT · DeepSeek Harness `0.1.5-rc.1`+ · Chrome/Edge 116+
     dsh plugin --profile web add link:/absolute/path/to/dsh-auto-translate
 
     # straight from GitHub
-    dsh plugin --profile web add github:<you>/dsh-auto-translate
+    dsh plugin --profile web add github:gst20060726/dsh-auto-translate
 
 Restart `dsh web` and refresh the browser. A translucent chip labelled 译 appears at the bottom-left.
 

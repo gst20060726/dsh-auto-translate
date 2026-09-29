@@ -80,6 +80,21 @@
 - 测试：`node --test "test/*.test.mjs"` → 38 项；旧 E2E（自动翻译/流式稳定期）已按新语义重写，
   新增框选/迁移/面板结构/文案契约测试。⚠️ **`node --test test/` 会报 MODULE_NOT_FOUND，必须用 glob**。
 
+## 找 GUI token：先看 `launcher.log`，不是 `dsh-web-server.log`（2026-09-29）
+
+**症状**：`http://127.0.0.1:3080/?token=<从 dsh-web-server.log 读到的>` → **401**，于是浏览器打不开 GUI。
+而且 `dsh-web-server.log` 的 mtime 停在 09-28（旧实例写的），当前实例（`...bin.js web --no-open --port 3080`，
+手动/launcher 启动、**命令行里没有 stdout 重定向**）的 token 根本没进那个文件。
+
+**根因与对策**（已实测）：
+- token 跟着**谁启动的**走：走 `restart-dsh-web.ps1` 才会重定向到 `dsh-web-server.log`；
+  走 **launcher** 则写入 **`~/.dsh/launcher/launcher.log`**。
+- 拿 token 的稳妥顺序：① `~/.dsh/launcher/launcher.log` → ② `~/.dsh/dsh-web-server.log`（取**最后**一枚）
+  → ③ 兜底：扫最近 4 小时内改动、<1MB 的文件里的 43 字符 `[A-Za-z0-9_-]` 串，**逐个用 HTTP 200 校验**。
+- **`dsh-pocket` 的 3081 不是主界面**：`http://127.0.0.1:3081/` 返回 `DSH Pocket · 访问验证`（表单 action=`/pocket-login`），
+  它的 8 字符 token 在 `~/.dsh/dsh-pocket/token`（LAN 版 `token-lan`）；用它打 3080 是 **401**。
+- 一句话：**开浏览器 GUI 前先校验 token（HTTP 200 且 body > 5KB），别拿日志里的字符串直接拼 URL。**
+
 ## GitHub 仓库上线 + 进市场的路（2026-09-28，全是实测踩坑）
 
 **目标**：让插件被 DSH 插件市场收录。市场**自动收录只认 GitHub 仓库 + `dsh-plugin` 话题**，

@@ -12,5 +12,7 @@ diagnose-*.json
 dashboard.html
 # real-browser verification screenshots (run: npm run verify:browser)
 panel-preview*.png
+# 整页截图里有真实会话内容：只留在本机给自己看，绝不入库（demo/ 下只提交裁过/自制的图）
+demo/raw/
 # ORT runtime is large: not committed, fetch it with npm run fetch-vendor or let the host fall back to the CDN
 vendor/ort/*.wasm

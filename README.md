@@ -12,10 +12,19 @@
 
 <img src="demo/hover-flow.svg" width="820" alt="悬停 0.6 秒 → 该块就地替换为译文；再停一次换回原文">
 
-**真机三连** —— 同一段文字，真鼠标移上去（`npm run capture:demo` 可复现；图为**合成块**，不含任何会话内容）<br>
-<img src="demo/hover-1-original.png" width="266" alt="① 原文（英文）">
-<img src="demo/hover-2-translated.png" width="266" alt="② 悬停约 0.6 秒后：就地换成中文">
-<img src="demo/hover-3-restored.png" width="266" alt="③ 移开再停一次：换回原文">
+**真机三连** —— 同一段文字，真鼠标在三个位置（`npm run capture:demo` 可复现；画面是脚本注入的**合成舞台**，不含任何会话内容）
+
+① 鼠标停在**空白处** —— 原文不动<br>
+<img src="demo/hover-1-original.png" width="520" alt="① 光标在空白处：英文原文，未触发翻译">
+
+② 鼠标停在**文字上**约 0.6 秒 —— 就地换成中文<br>
+<img src="demo/hover-2-translated.png" width="520" alt="② 光标停在文字上：该块已就地换成中文">
+
+③ 移开后再停一次 —— 换回原文<br>
+<img src="demo/hover-3-restored.png" width="520" alt="③ 移开再停一次：换回英文原文">
+
+> 光标箭头是 `capture-demo.mjs` 画上去的标记（headless 截图拍不到系统光标），**位置是真鼠标当时的坐标**，
+> 悬停本身也是真实鼠标事件（`page.mouse.move`）。
 
 <img src="demo/panel.png" width="248" alt="设置面板实拍（真机截图）">
 
@@ -164,10 +173,10 @@ npm run verify:browser    # 真浏览器：面板真实布局/是否滚动/是�
 > `README` 里的 `demo/panel.png` 就是这个脚本的产物，再裁掉四周 16px 的页面边带（只留插件面板本身，
 > 不带你自己的会话内容）。**整页截图只留本机 `demo/raw/`（已 gitignore）**：那里面有真实会话。
 >
-> 悬停三连（`demo/hover-1|2|3-*.png`）由 `npm run capture:demo` 生成：往页面注入一个合成英文块，
-> 用真鼠标移上去，分别在「悬停前 / 翻译后 / 换回原文」三点按该块的矩形精确裁图 —— 三张都是 540×112、
-> **只含合成内容**，与你的会话、路径、账号无关。出图时把引擎切成了**在线免密钥**（否则要等 425MB
-> 本机模型下载）；界面表现与引擎无关，只是「由谁翻」不同。
+> 悬停三连（`demo/hover-1|2|3-*.png`）由 `npm run capture:demo` 生成：脚本往页面注入一块白底**舞台**
+> ＋一个对话块＋一个光标标记 —— 这样「光标在空白处」那帧里的空白也是注入的，可以按舞台整块裁切
+> （560×150）而不带出真实会话。光标位置取**真鼠标当时的坐标**（系统光标截不到，箭头是画的标记）。
+> 出图时把引擎切成了**在线免密钥**（否则要等 425MB 本机模型下载）；界面表现与引擎无关，只是「由谁翻」不同。
 
 ## 兼容性
 

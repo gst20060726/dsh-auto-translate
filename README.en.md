@@ -12,10 +12,19 @@
 
 <img src="demo/hover-flow.svg" width="820" alt="Hover a block for ~0.6s and it is swapped in place; hover again to restore the original">
 
-**Three frames from a real browser** — same text, real mouse hovering (`npm run capture:demo` reproduces them; the block is **synthetic**, no conversation content)<br>
-<img src="demo/hover-1-original.png" width="266" alt="① original (English)">
-<img src="demo/hover-2-translated.png" width="266" alt="② after hovering ~0.6s: swapped in place">
-<img src="demo/hover-3-restored.png" width="266" alt="③ hover away and back: restored">
+**Three frames from a real browser** — same text, the real mouse at three positions (`npm run capture:demo` reproduces them; the scene is a synthetic stage injected by the script, with no conversation content)
+
+① cursor in **empty space** — the original stays put<br>
+<img src="demo/hover-1-original.png" width="520" alt="① cursor away from the text: original English, nothing translated">
+
+② cursor **on the text** for ~0.6s — swapped in place<br>
+<img src="demo/hover-2-translated.png" width="520" alt="② cursor on the text: the block is now Chinese">
+
+③ hover away and back — restored<br>
+<img src="demo/hover-3-restored.png" width="520" alt="③ hovering again: back to the English original">
+
+> The cursor arrow is a marker drawn by `capture-demo.mjs` (headless screenshots cannot capture the OS pointer).
+> Its position is the **real mouse coordinate** at that moment, and the hover itself is a real mouse event.
 
 <img src="demo/panel.png" width="248" alt="Settings panel (real screenshot from the browser acceptance run)">
 
@@ -167,11 +176,12 @@ npm run verify:browser    # real browser: panel layout / scrolling / clipping + 
 > panel remains (no conversation content). **Full-page screenshots stay local in `demo/raw/` (gitignored)** — they
 > contain the real session.
 >
-> The three hover frames (`demo/hover-1|2|3-*.png`) come from `npm run capture:demo`: it injects a synthetic English
-> block into the page, moves the real mouse onto it, and clips each shot to that block's rectangle at three moments
-> (before / translated / restored). All three are 540×112 and contain **only synthetic content** — nothing from your
-> session, paths or account. The capture switches the engine to **online keyless** (otherwise it would have to wait
-> for the 425MB on-device model); the engine only decides *who* translates, not how the UI behaves.
+> The three hover frames (`demo/hover-1|2|3-*.png`) come from `npm run capture:demo`: the script injects a white
+> **stage** plus a reply block plus a cursor marker, so even the "cursor in empty space" frame uses injected
+> whitespace and the whole stage can be clipped (560×150) without dragging in the real session. The cursor sits at
+> the **real mouse coordinate** (the OS pointer cannot be captured headlessly, so the arrow is drawn). The capture
+> switches the engine to **online keyless** (otherwise it would wait for the 425MB on-device model); the engine only
+> decides *who* translates, not how the UI behaves.
 
 ## Compatibility
 

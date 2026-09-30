@@ -12,6 +12,11 @@
 
 <img src="demo/hover-flow.svg" width="820" alt="悬停 0.6 秒 → 该块就地替换为译文；再停一次换回原文">
 
+**真机三连** —— 同一段文字，真鼠标移上去（`npm run capture:demo` 可复现；图为**合成块**，不含任何会话内容）<br>
+<img src="demo/hover-1-original.png" width="266" alt="① 原文（英文）">
+<img src="demo/hover-2-translated.png" width="266" alt="② 悬停约 0.6 秒后：就地换成中文">
+<img src="demo/hover-3-restored.png" width="266" alt="③ 移开再停一次：换回原文">
+
 <img src="demo/panel.png" width="248" alt="设置面板实拍（真机截图）">
 
 </div>
@@ -158,6 +163,10 @@ npm run verify:browser    # 真浏览器：面板真实布局/是否滚动/是�
 
 > `README` 里的 `demo/panel.png` 就是这个脚本的产物，再裁掉四周 16px 的页面边带（只留插件面板本身，
 > 不带你自己的会话内容）。**整页截图只留本机 `demo/raw/`（已 gitignore）**：那里面有真实会话。
+>
+> 悬停三连（`demo/hover-1|2|3-*.png`）由 `npm run capture:demo` 生成：往页面注入一个合成英文块，
+> 用真鼠标移上去，分别在「悬停前 / 翻译后 / 换回原文」三点按该块的矩形精确裁图 —— 三张都是 540×112、
+> **只含合成内容**，与你的会话、路径、账号无关。
 
 ## 兼容性
 

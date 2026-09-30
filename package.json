@@ -21,6 +21,9 @@
     "DEV-STATE.md",
     "demo/hover-flow.svg",
     "demo/panel.png",
+    "demo/hover-1-original.png",
+    "demo/hover-2-translated.png",
+    "demo/hover-3-restored.png",
     "scripts",
     "vendor/worker.v5.js",
     "vendor/transformers.esm.v2.js",
@@ -65,7 +68,8 @@
     "fetch-vendor": "node scripts/fetch-vendor.mjs",
     "status": "powershell -ExecutionPolicy Bypass -File scripts/status.ps1",
     "dashboard": "node scripts/dashboard.mjs",
-    "verify:browser": "node scripts/verify-browser.mjs"
+    "verify:browser": "node scripts/verify-browser.mjs",
+    "capture:demo": "node scripts/capture-demo.mjs"
   },
   "devDependencies": {
     "jsdom": "^30.0.1"

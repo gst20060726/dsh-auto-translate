@@ -12,6 +12,11 @@
 
 <img src="demo/hover-flow.svg" width="820" alt="Hover a block for ~0.6s and it is swapped in place; hover again to restore the original">
 
+**Three frames from a real browser** — same text, real mouse hovering (`npm run capture:demo` reproduces them; the block is **synthetic**, no conversation content)<br>
+<img src="demo/hover-1-original.png" width="266" alt="① original (English)">
+<img src="demo/hover-2-translated.png" width="266" alt="② after hovering ~0.6s: swapped in place">
+<img src="demo/hover-3-restored.png" width="266" alt="③ hover away and back: restored">
+
 <img src="demo/panel.png" width="248" alt="Settings panel (real screenshot from the browser acceptance run)">
 
 中文说明：[README.md](README.md)
@@ -161,6 +166,11 @@ npm run verify:browser    # real browser: panel layout / scrolling / clipping + 
 > `demo/panel.png` in this README is that script's output, cropped by 16px on each side so only the plugin's own
 > panel remains (no conversation content). **Full-page screenshots stay local in `demo/raw/` (gitignored)** — they
 > contain the real session.
+>
+> The three hover frames (`demo/hover-1|2|3-*.png`) come from `npm run capture:demo`: it injects a synthetic English
+> block into the page, moves the real mouse onto it, and clips each shot to that block's rectangle at three moments
+> (before / translated / restored). All three are 540×112 and contain **only synthetic content** — nothing from your
+> session, paths or account.
 
 ## Compatibility
 

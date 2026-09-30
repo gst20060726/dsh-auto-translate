@@ -1,3 +1,6 @@
+# 注意：package.json 里存在 `files` 字段时，npm **忽略本文件的排除规则**（实测：
+# 这里写着 CHANGELOG.md，可它一直在包里）。所以「不打包某个文件」只能靠 files 逐项点名，
+# 不能靠这里排除 —— demo/raw/ 就是这样处理的（它压根不在 files 里）。
 vendor/ort/*.wasm
 .git*
 CHANGELOG.md

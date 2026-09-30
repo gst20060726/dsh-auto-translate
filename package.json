@@ -19,6 +19,8 @@
     "CHANGELOG.md",
     "LICENSE",
     "DEV-STATE.md",
+    "demo/hover-flow.svg",
+    "demo/panel.png",
     "scripts",
     "vendor/worker.v5.js",
     "vendor/transformers.esm.v2.js",

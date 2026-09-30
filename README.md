@@ -70,7 +70,7 @@ dsh plugin --profile web add github:gst20060726/dsh-auto-translate
 dsh plugin --profile web add link:/absolute/path/to/dsh-auto-translate
 
 # 本地 tgz：先 npm pack 得到 dsh-auto-translate-<版本>.tgz，再把文件发给对方
-dsh plugin --profile web add /对方/路径/dsh-auto-translate-0.4.2.tgz
+dsh plugin --profile web add /对方/路径/dsh-auto-translate-<版本>.tgz
 
 # Gitee 镜像（国内可推）
 dsh plugin --profile web add 'git+https://gitee.com/nysjn/dsh-auto-translate.git#<commit>'

@@ -74,7 +74,7 @@ dsh plugin --profile web add github:gst20060726/dsh-auto-translate
 dsh plugin --profile web add link:/absolute/path/to/dsh-auto-translate
 
 # local tarball: npm pack, then hand the file over
-dsh plugin --profile web add /path/to/dsh-auto-translate-0.4.2.tgz
+dsh plugin --profile web add /path/to/dsh-auto-translate-<version>.tgz
 
 # Gitee mirror (no GitHub needed)
 dsh plugin --profile web add 'git+https://gitee.com/nysjn/dsh-auto-translate.git#<commit>'

@@ -438,7 +438,7 @@ Gitee-only 永远进不去（市场里那个同名 `dsh-auto-translate` 是 **qw
 3. ~~若要让插件市场自动收录，还需把仓库放到 GitHub 并加 `dsh-plugin` 话题~~ —— **已做完但仍未被收录**，
    卡点已确认不在本仓库，见下节；别再在本仓库里折腾。
 
-## 上架与发现：市场还没收录、README 改成「为发现而写」（2026-09-30，未发版）
+## 上架与发现：市场还没收录、README 改成「为发现而写」（2026-09-30）
 
 ### 1. 还没进插件目录 —— 证据链指向市场侧，不是本仓库
 
@@ -471,6 +471,34 @@ Gitee-only 永远进不去（市场里那个同名 `dsh-auto-translate` 是 **qw
 - ⚠️ 逐像素自查脚本第一版有越界 + 变量未重置的 bug（报出假的「484 暗像素」）。正确做法：**图内坐标
   = 屏幕坐标 − 舞台原点**，并留一块同尺寸对照区（实测：光标窗口 暗 85 / 亮 351，对照区 0）。
 - 真机验收顺手又跑通一次：`npm run verify:browser` → `passed=true`、`failures=[]`。
-- **待办**：npm 页面上的 README 仍是 0.4.2 发布时那份 —— 要让新 README 与五张图出现在 npmjs，
-  得发 **0.4.3**（需要 npm token，放在本机 `~/.npmrc`；顺便把 `repository/homepage/bugs` 指向 GitHub）。
+### 4. 0.4.3 已发布（2026-09-30T11:58:47Z）＋ 三条实测教训
+
+- npm latest = **0.4.3**，29 文件 358KB，shasum `e3d2b1a583ac48af71b8508151f0f63f9c92b023`；
+  `repository/homepage/bugs` 已从 Gitee 改指 GitHub（**这一步决定了 npm 页面上的图能不能显示**，见下）。
+- **发布令牌**：granular，勾 **Bypass 2FA** + `Read and write (publish and stage)` + All packages，
+  90 天（2026-12-29 到期）。⚠️ npm 公告：**绕过 2FA 的 granular 令牌将于 2027 年 1 月停止直接发布**
+  （`github.blog/changelog/2026-07-08-…`）—— 到期前要么换 Classic → Automation，要么上 Trusted Publishing。
+
+三条教训（都是这次踩出来的）：
+
+1. **`npm whoami` 报 E401 时，先量令牌长度，别先怀疑配置位置。** 本次真因是复制多带了 4 个字符：
+   `.npmrc` 里是 **44 位**，而正确令牌是 **40 位**（都 `npm_` 开头、都是字母数字）。判据：把 `.npmrc`
+   里那串直接打到 `GET https://registry.npmjs.org/-/whoami`（值只过内存、不打印）→ 也 401 就说明
+   **是值本身错**，与 `registry` / 键名 / 文件位置无关。**可靠写法是从剪贴板进**：
+   `npm config set //registry.npmjs.org/:_authToken=(Get-Clipboard).Trim()` —— `.Trim()` 去掉混进来的换行/空格。
+   （自查脚本里不要回显令牌片段，末 4 位既没用也不必要。）
+2. **发布后注册表有 CDN 缓存，`npm view` 会骗人。** 本次发布成功后约 2 分钟内 `npm view` 仍返回 0.4.2、
+   版本接口 404（npm 自己的提示是 "may take a few minutes"）。**绕过缓存**：
+   `https://registry.npmjs.org/dsh-auto-translate?t=<随机数>` —— 带 `?t=` 立刻就能看到 0.4.3 与正确的 dist-tags。
+3. **npm 会把 README 里的相对图路径重写成仓库 raw 地址**（实测）：`demo/panel.png` 在 npmjs 上变成
+   `https://raw.githubusercontent.com/<owner>/<repo>/HEAD/demo/panel.png`。所以：**图必须在包里**
+   （`files` 白名单，见上节），**且 `repository` 必须指向真正放着这些图的仓库** —— 这次从 Gitee 改成 GitHub
+   正好满足后者；若 `repository` 指向别处，图就会裂。
+
+### 5. 一个待你决定的点：`DEV-STATE.md` 会随包发布
+
+`files` 白名单里有 `DEV-STATE.md`（38KB 内部笔记，含本机路径、浏览器扩展 ID、运维细节），所以
+**它在 npm 包里、任何人都能 `npm pack` 拿到**（0.4.2 起就是这样，不是这次引入的）。它同时也在公开的
+GitHub 仓库里，所以不算新增暴露面；但如果你不想让它出现在 npm 包内，把 `files` 里那一行删掉即可
+（注意：有 `files` 字段时 `.npmignore` 无效，只能在 `files` 里删）。
 

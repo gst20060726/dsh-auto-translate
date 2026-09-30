@@ -435,4 +435,42 @@ Gitee-only 永远进不去（市场里那个同名 `dsh-auto-translate` 是 **qw
 
 1. jsdom 纯 E2E：翻译 → 悬停切换 → 观察者不覆盖（目前只到纯函数级）。
 2. 面板已中英双语；README 与诊断文本可再细化英文。
-3. 若要让插件市场**自动收录**，还需把仓库放到 GitHub 并加 `dsh-plugin` 话题（Gitee 不参与收录）。
+3. ~~若要让插件市场自动收录，还需把仓库放到 GitHub 并加 `dsh-plugin` 话题~~ —— **已做完但仍未被收录**，
+   卡点已确认不在本仓库，见下节；别再在本仓库里折腾。
+
+## 上架与发现：市场还没收录、README 改成「为发现而写」（2026-09-30，未发版）
+
+### 1. 还没进插件目录 —— 证据链指向市场侧，不是本仓库
+
+- GitHub 侧**逐项合格**：`api.github.com/repos/gst20060726/dsh-auto-translate` 的 `topics` 含 `dsh-plugin`；
+  用 GitHub 自己的搜索 `topic:dsh-plugin user:gst20060726` 得 `total_count: 1`。public、未归档、MIT。
+- 扫描器**在跑**：`w2112515/dsh-plugin-marketplace` 的 `Publish plugin catalog`
+  （`.github/workflows/catalog-pages.yml`，cron `17 3 * * *`）09-29 / 09-30 两次 `success`；
+  被拒候选存成 artifact `plugin-marketplace-rejected-v1`（要登录才能下）。
+- 收录门槛（读 `scripts/plugin-marketplace-scan.ts` 得到，不是猜）：根 `package.json` 存在且合法 →
+  声明 `dsh.bundle.patch` → 补丁路径安全且文件存在 → **补丁是合法 Cordis 文档**
+  （`Array.isArray(patch) && 每项含 insert/update/remove`）→ 仓库未归档。本仓库逐条通过。
+- 但目录里没有它，且最新条目的 `first indexed` 都停在 `2026-09-14T08:53:37.655Z`
+  （`dsh-flow` 与 `dsh-optimize` 时间戳一字不差）；本仓库的 GitHub id（1392711635）比目录里任何条目都新。
+- **未提 issue**（用户说不用）。结论：这是市场侧的事，**别在本仓库里改来改去**。
+
+### 2. npm 的 `files` 会让 `.npmignore` 变哑（真踩过，差点泄漏）
+
+只要 `package.json` 有 `files` 字段，npm **忽略 `.npmignore` 的排除规则**。现成证据：`.npmignore` 里写着
+`CHANGELOG.md`，可它一直在包里。所以「不打包某文件」只能靠 `files` **逐项点名**：本次给 README 加图时
+先写了 `"demo"` 整目录，结果把含真实会话的 `demo/raw/*.png` 也打进了**公开 npm 包**（比 git 泄漏更糟）；
+改成点名五个文件后 `npm pack --dry-run` 实测拦住。
+
+### 3. 发现面：README + 演示图
+
+- README 改成「为发现而写」：居中标题 + 一句话定位 + **动态**徽章（原来版本号是硬写的 0.4.2）+ 图组
+  + 「30 秒看懂」；顺手修掉 11 处把行内代码写成 `[[...]]` 的地方（GitHub 上会原样显示）。技术内容一字未删。
+- 演示图三连 `demo/hover-1|2|3-*.png` 由 `npm run capture:demo`（`scripts/capture-demo.mjs`）产出：
+  注入**合成舞台**（白底面版 + 对话块 + 光标标记）→ 真鼠标三个位置 → 按舞台矩形裁 560×150。
+  ⚠️ **系统光标 headless 截不到**，箭头是脚本画的标记（位置 = 真鼠标坐标，悬停本身是真事件），README 已注明。
+- ⚠️ 逐像素自查脚本第一版有越界 + 变量未重置的 bug（报出假的「484 暗像素」）。正确做法：**图内坐标
+  = 屏幕坐标 − 舞台原点**，并留一块同尺寸对照区（实测：光标窗口 暗 85 / 亮 351，对照区 0）。
+- 真机验收顺手又跑通一次：`npm run verify:browser` → `passed=true`、`failures=[]`。
+- **待办**：npm 页面上的 README 仍是 0.4.2 发布时那份 —— 要让新 README 与五张图出现在 npmjs，
+  得发 **0.4.3**（需要 npm token，放在本机 `~/.npmrc`；顺便把 `repository/homepage/bugs` 指向 GitHub）。
+

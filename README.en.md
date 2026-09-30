@@ -170,7 +170,8 @@ npm run verify:browser    # real browser: panel layout / scrolling / clipping + 
 > The three hover frames (`demo/hover-1|2|3-*.png`) come from `npm run capture:demo`: it injects a synthetic English
 > block into the page, moves the real mouse onto it, and clips each shot to that block's rectangle at three moments
 > (before / translated / restored). All three are 540×112 and contain **only synthetic content** — nothing from your
-> session, paths or account.
+> session, paths or account. The capture switches the engine to **online keyless** (otherwise it would have to wait
+> for the 425MB on-device model); the engine only decides *who* translates, not how the UI behaves.
 
 ## Compatibility
 

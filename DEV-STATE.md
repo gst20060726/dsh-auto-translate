@@ -502,3 +502,27 @@ Gitee-only 永远进不去（市场里那个同名 `dsh-auto-translate` 是 **qw
 GitHub 仓库里，所以不算新增暴露面；但如果你不想让它出现在 npm 包内，把 `files` 里那一行删掉即可
 （注意：有 `files` 字段时 `.npmignore` 无效，只能在 `files` 里删）。
 
+## 机器网络：github.com 网页被 SNI 层掐掉、PS 5.1 的旧 TLS Hello 被丢（2026-10-01 实测）
+
+逐层测出来的事实（node + PowerShell 交叉验证）：
+
+- DNS 正常（`github.com -> 20.205.243.166`）；**所有候选 IP 的 443 TCP 都通**
+  （140.82.113.3 / 140.82.112.3 / 20.27.177.113 / 20.200.245.247 / 20.233.83.145 …）。
+- 但只要 **SNI=github.com**，换哪个 IP 都一样：TLS `timeout` / `ECONNRESET`；
+  而同一批 IP 上 `api.github.com`（HTTP 200）、`raw.githubusercontent.com`（301）、
+  `codeload.github.com`（301）**全部正常** → **不是 DNS、不是 IP 封锁，是 `github.com`
+  这个主机名在 TLS 层被单独处理**。本机**无 IPv6**（无 AAAA 记录）。
+- **后果**：浏览器也打不开 github.com 网页 → 标签永远不完成 → 内容脚本注入不了 →
+  浏览器桥报 `DOM protected` / `no browser extension is connected`。
+  ⚠️ **之前把桥当故障是误判**：桥没坏，是页面根本没加载。
+- **可修的部分**：本机**只有 PowerShell 5.1（没有 pwsh 7）**，它默认用旧的 TLS ClientHello，
+  被中间设备丢弃 → 同一时刻 `Invoke-WebRequest https://api.github.com/...` 超时而 node 200。
+  **钉 TLS 1.2 立刻通**（实测对照：钉了读到数据、不钉超时）：
+  `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12`
+  另加 `[System.Net.WebRequest]::DefaultWebProxy = $null` 防继承 IE 代理。
+  凡 .ps1 要访问 GitHub API / raw 的，都必须加这两行。
+- **处理办法**：`github.com` 网页只能换网络或走代理（本机已装 **VPN Unlimited**；Radmin VPN
+  只做虚拟局域网；游戏加速器一般不管 github）。API 类操作走「钉了 TLS 的 PS」或 node 即可。
+- 现成工具：`~\.dsh\set-github-topics.ps1` —— 从剪贴板取令牌 → `PUT /repos/{owner}/{repo}/topics`
+  → 只打印结果、**不打印令牌**；`-WhatIf` 只读当前 topics。
+

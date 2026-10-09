@@ -82,6 +82,9 @@ test('浏览器半符合模块加载器契约', () => {
 
 test('纯函数行为：语言判定 / 分块 / 热键组合 / 错误提示', () => {
   const t = loadClient().mod.__test
+  // hintFor 的文案跟随界面语言，而 L() 在没有 settings.lang 时读 navigator.language。
+  // Node >= 21 自带全局 navigator（language 多为 en-US），所以这里必须把语言钉死，
+  // 否则本测试在非中文机器/CI 上会拿英文文案去匹配中文正则而失败。
   assert.equal(t.scriptTag('Hello there'), 'latin')
   assert.equal(t.scriptTag('你好，世界'), 'zh')
   assert.equal(t.scriptTag('こんにちは'), 'ja')
@@ -95,10 +98,17 @@ test('纯函数行为：语言判定 / 分块 / 热键组合 / 错误提示', ()
   assert.equal(t.comboOf({ ctrlKey: true, altKey: true, shiftKey: false, metaKey: false, key: 't' }), 'Ctrl+Alt+T')
   assert.equal(t.comboOf({ ctrlKey: true, key: 'Control' }), '', '纯修饰键不应算组合')
 
+  t.settings.lang = 'zh'
   assert.match(t.hintFor('Missing required scale: x'), /fp32/)
   assert.match(t.hintFor('Failed to fetch'), /网络/)
   assert.match(t.hintFor('quotaFinished'), /本机离线/)
   assert.equal(t.hintFor('一切正常'), '')
+
+  // 同一个 key 的英文文案也必须存在：面板语言可切换，缺一边就是 running 时的 key 名
+  t.settings.lang = 'en'
+  assert.match(t.hintFor('Failed to fetch'), /network|proxy/i)
+  assert.match(t.hintFor('quotaFinished'), /device|offline/i)
+  t.settings.lang = 'zh'
 
   assert.ok(t.limits.QUEUE_MAX > 0 && t.limits.RECORDS_MAX > 0)
 })

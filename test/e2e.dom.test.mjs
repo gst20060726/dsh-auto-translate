@@ -745,3 +745,82 @@ test('E2E 0.4.0: 头部模式条反映「由谁翻 + 框选方式」，且不再
     window.close()
   }
 })
+
+test('E2E RTL: 目标语言为 RTL 时译文块带方向，切回原文与整体还原后都不残留', { skip }, async () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><body><div id="a"><p id="p1">Hello world, this needs translation.</p></div></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true },
+  )
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, hoverSettings({ target: 'ar', lang: 'en' }))
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const p1 = window.document.getElementById('p1')
+    const node = p1.firstChild
+    const original = node.nodeValue
+    const mod = loadClientInto(window)
+    mod.apply({})
+
+    // 悬停 → 译文：RTL 目标必须带上方向，否则引号/括号与拉丁标识符的视觉顺序会反过来
+    p1.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+    assert.ok(await waitFor(() => /ZH</.test(node.nodeValue), 3000), '悬停后应翻译，实际: ' + JSON.stringify(node.nodeValue))
+    assert.equal(p1.getAttribute('dir'), 'rtl', 'RTL 目标的译文块应带 dir=rtl')
+    assert.equal(p1.style.unicodeBidi, 'isolate', '译文块应与外壳 LTR 隔离')
+
+    // 再悬停 → 原文：方向要一起还回去。残留会让原本的 LTR 段落错排，所以这里必须为空
+    p1.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true, relatedTarget: window.document.body }))
+    await sleep(120)
+    p1.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+    assert.ok(await waitFor(() => node.nodeValue === original, 3000), '再次悬停应复原原文，实际: ' + JSON.stringify(node.nodeValue))
+    assert.equal(p1.getAttribute('dir'), null, '复原原文后不得残留 dir')
+    assert.equal(p1.style.unicodeBidi || '', '', '复原原文后不得残留 unicode-bidi')
+
+    // 再翻一次，然后走「整体还原」（切引擎/复位走同一条路）
+    p1.dispatchEvent(new window.MouseEvent('mouseout', { bubbles: true, relatedTarget: window.document.body }))
+    await sleep(120)
+    p1.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+    assert.ok(await waitFor(() => /ZH</.test(node.nodeValue), 3000), '应再次翻译')
+    assert.equal(p1.getAttribute('dir'), 'rtl', '再次翻译后仍应带方向')
+    mod.__test.resetTranslationState(true)
+    assert.equal(node.nodeValue, original, '整体还原应回到原文')
+    assert.equal(p1.getAttribute('dir'), null, '整体还原后不得残留 dir')
+    assert.equal(p1.style.unicodeBidi || '', '', '整体还原后不得残留 unicode-bidi')
+  } finally {
+    window.close()
+  }
+})
+
+test('E2E RTL: 非 RTL 目标不加方向；flex 容器不被赋值方向（回归）', { skip }, async () => {
+  const dom = new JSDOM(
+    '<!doctype html><html><body><p id="p1">Hello world, this needs translation.</p>'
+    + '<div id="row" style="display:flex">Flex row text that also needs translation.</div></body></html>',
+    { url: 'http://127.0.0.1:3080/', pretendToBeVisual: true },
+  )
+  const { window } = dom
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, hoverSettings({ target: 'zh', lang: 'zh' }))
+    window.Element.prototype.getBoundingClientRect = function () {
+      return { width: 120, height: 20, top: 0, left: 0, right: 120, bottom: 20, x: 0, y: 0 }
+    }
+    const p1 = window.document.getElementById('p1')
+    const node = p1.firstChild
+    const mod = loadClientInto(window)
+    mod.apply({})
+
+    p1.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+    assert.ok(await waitFor(() => /ZH</.test(node.nodeValue), 3000), 'zh 目标应翻译')
+    assert.equal(p1.getAttribute('dir'), null, '非 RTL 目标不得添加方向')
+
+    // flex 容器加 dir 会把子元素整行翻个个儿：这类容器不给方向
+    mod.__test.settings.target = 'ar'
+    const row = window.document.getElementById('row')
+    const rowNode = row.firstChild
+    row.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }))
+    assert.ok(await waitFor(() => /ZH</.test(rowNode.nodeValue), 3000), 'flex 行内的文本仍应翻译')
+    assert.equal(row.getAttribute('dir'), null, 'flex 容器不得被赋值方向（会重排子元素）')
+  } finally {
+    window.close()
+  }
+})

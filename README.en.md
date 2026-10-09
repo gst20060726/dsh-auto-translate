@@ -109,6 +109,8 @@ The panel is grouped into *Common / Trigger & selection / Engine & models / Adva
 | **Skips** | Inputs, `code`/`pre` (unless "also translate code" is on), `contenteditable`, CodeMirror/Monaco, and this plugin's own panel |
 | **Cannot** | Anything **outside the DSH page**: other browser tabs, other websites, native apps. The plugin is injected into the DSH web UI only — use a browser extension/userscript for those |
 
+**RTL targets.** When the target language is RTL (Arabic, Hebrew, Persian, Urdu, …) the translated block carries `dir="rtl"` with bidi isolation — the inline-selection span too — and it is removed again when the original comes back or the page is restored. Without it, brackets, quotes and Latin identifiers read in the wrong visual order inside the LTR shell.
+
 A single selection translates up to **4000 characters** by default (configurable in the panel, `0` = no limit; a 60000-char hard cap remains). Beyond the cap you get an explicit "capped at the first N chars" note.
 
 ## Engines

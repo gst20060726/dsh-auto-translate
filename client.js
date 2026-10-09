@@ -171,6 +171,54 @@ window.__ModuleLoader__.load({
 		setInterval(cacheFlush, 8000);
 		function cacheKey(text, src, tgt) { return tgt + '\u0001' + src + '\u0001' + text; }
 
+		// ===================== 目标语言方向（RTL） =====================
+		// 就地替换会继承外壳的基准方向（LTR）：目标语言若是阿拉伯语、希伯来语、波斯语、
+		// 乌尔都语等 RTL，引号/括号与拉丁标识符混排的标点顺序会反过来，整段也留在左边。
+		// 方向只写在承载译文的元素上，并在「切回原文 / 整体还原」时按记录把旧值还回去。
+		var RTL_TARGETS = { ar: 1, he: 1, fa: 1, ur: 1, yi: 1, dv: 1, ps: 1, sd: 1, ug: 1 };
+		function targetIsRtl() {
+			return !!RTL_TARGETS[String(settings.target || '').split('-')[0].toLowerCase()];
+		}
+		// flex/grid 容器加 dir 会重排子元素（整行翻个个儿）：这类容器不给方向，
+		// 交给它内部真正直接装文本的那一块。
+		function directionHost(el) {
+			if (!el || el.nodeType !== 1) return null;
+			// 内联样式先看（快，垫片里也有）；再看计算值（类名来自 CSS Module 时只有它看得出来）。
+			// 统一走 window.* —— 宿主与测试垫片只保证 window 上的能力，裸全局不一定存在。
+			try {
+				var inline = el.style && el.style.display;
+				if (inline === 'flex' || inline === 'grid') return null;
+			} catch (e) { }
+			try {
+				var cs = window.getComputedStyle ? window.getComputedStyle(el) : null;
+				var d = cs && cs.display;
+				if (d === 'flex' || d === 'grid') return null;
+			} catch (e) { }
+			return el;
+		}
+		function setTargetDirection(rec, el) {
+			var host = directionHost(el);
+			if (!host) return;
+			if (rec && !rec.dirSaved) {
+				rec.dirSaved = true;
+				rec.dirHost = host;
+				rec.dirPrev = host.getAttribute('dir');
+				rec.bidiPrev = host.style.unicodeBidi || '';
+			}
+			if (!targetIsRtl()) return;
+			host.setAttribute('dir', 'rtl');
+			host.style.unicodeBidi = 'isolate';
+		}
+		function clearTargetDirection(rec) {
+			if (!rec || !rec.dirSaved || !rec.dirHost) return;
+			try {
+				if (rec.dirPrev === null) rec.dirHost.removeAttribute('dir');
+				else rec.dirHost.setAttribute('dir', rec.dirPrev);
+				rec.dirHost.style.unicodeBidi = rec.bidiPrev || '';
+			} catch (e) { }
+		}
+
+
 		// ===================== 语言判定（纯本地启发式，零成本） =====================
 		var SCRIPTS = [
 			['ja', /[\u3040-\u30ff]/],
@@ -972,6 +1020,7 @@ window.__ModuleLoader__.load({
 					stats.translated++;
 					stats.chars += text.length;
 					if (el) el.setAttribute('data-dsh-at', 'translated');
+					setTargetDirection(rec, el);
 				}
 			} finally {
 				working = false;
@@ -1084,6 +1133,7 @@ window.__ModuleLoader__.load({
 			processed.add(node);
 			node.nodeValue = lead + out + tail;
 			selfWrites.set(node, Date.now());
+			setTargetDirection(rec, node.parentElement);
 			translatedCount++;
 			stats.translated++;
 			stats.chars += text.length;
@@ -1148,6 +1198,8 @@ window.__ModuleLoader__.load({
 				if (r.showingOriginal) { r.node.nodeValue = r.translated; r.showingOriginal = false; }
 				else { r.node.nodeValue = r.original; r.showingOriginal = true; }
 				selfWrites.set(r.node, Date.now());
+				if (r.showingOriginal) clearTargetDirection(r);
+				else setTargetDirection(r, r.node.parentElement);
 				changed++;
 			}
 			if (!changed) return false;
@@ -1268,7 +1320,7 @@ window.__ModuleLoader__.load({
 			var n = 0;
 			for (var i = 0; i < records.length; i++) {
 				var r = records[i];
-				if (r.node.isConnected && r.showingOriginal === false) { r.node.nodeValue = r.original; selfWrites.set(r.node, Date.now()); n++; }
+				if (r.node.isConnected && r.showingOriginal === false) { r.node.nodeValue = r.original; selfWrites.set(r.node, Date.now()); clearTargetDirection(r); n++; }
 			}
 			return n;
 		}
@@ -1430,6 +1482,7 @@ window.__ModuleLoader__.load({
 				span.setAttribute('data-dsh-at-sel', '1');
 				span.setAttribute('data-dsh-at-skip', '1');   // 不被悬停/扫描重复翻译
 				span.setAttribute('data-dsh-at-src', item.text);
+				if (targetIsRtl()) { span.setAttribute('dir', 'rtl'); span.style.unicodeBidi = 'isolate'; }
 				span.style.background = 'rgba(61,220,132,.16)';
 				span.style.borderBottom = '1px dotted rgba(61,220,132,.65)';
 				span.textContent = translated;
